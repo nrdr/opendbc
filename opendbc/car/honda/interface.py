@@ -98,7 +98,7 @@ class CarInterface(CarInterfaceBase):
     else:
       # Gentle Following / Honda Alt Tune
       ret.longitudinalTuning.kiBP = [0., 5., 35.]
-      ret.longitudinalTuning.kiV = [0.6, 0.4, 0.25]
+      ret.longitudinalTuning.kiV = [1.2, 0.8, 0.5]
       # # default longitudinal tuning for all hondas
       # ret.longitudinalTuning.kiBP = [0., 5., 35.]
       # ret.longitudinalTuning.kiV = [1.2, 0.8, 0.5]
