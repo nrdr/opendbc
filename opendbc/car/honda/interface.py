@@ -295,9 +295,9 @@ class CarInterface(CarInterfaceBase):
       if ret.flags & HondaFlagsSP.EPS_MODIFIED:
         for fw in car_fw:
           if fw.ecu == "eps" and b"-" not in fw.fwVersion and b"," in fw.fwVersion:
-            stock_cp.lateralTuning.pid.kf = 0.00004
-            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 1408, 2560, 3328, 3840, 4288, 4607, 4864, 15360], [0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840]]
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.1575], [0.05175]]
+            stock_cp.lateralTuning.pid.kf = 0.00006
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560, 9000], [0, 2560, 3840]]
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
           elif fw.ecu == "eps" and b"-" in fw.fwVersion and b"," in fw.fwVersion:
             stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 5760, 10240], [0, 2560, 3840]]
             stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
