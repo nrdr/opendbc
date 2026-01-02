@@ -296,13 +296,13 @@ class CarInterface(CarInterfaceBase):
         for fw in car_fw:
           if fw.ecu == "eps" and b"-" not in fw.fwVersion and b"," in fw.fwVersion: # 3X
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
-            # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x3C00
-            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560, 15360], [0, 2560, 3840]] # TODO: See if this interp logic is better than 1:1 ratio
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.21], [0.07]]
-          elif fw.ecu == "eps" and b"-" in fw.fwVersion and b"," in fw.fwVersion: # 2X
+            # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x74BF, 0x7FFF
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x74BF, 0x7FFF], [0x0, 0x100, 0x200, 0x300, 0x400, 0x600, 0x800, 0xA00, 0xF00]] # TODO: JUST TESTING: THIS WILL GET CHANGED
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
+          elif fw.ecu == "eps" and b"-" in fw.fwVersion and b"," in fw.fwVersion: # 32,767
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
-            # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x2800
-            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560, 10240], [0, 2560, 3840]] # TODO: See if this interp logic is better than 1:1 ratio
+            # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x74BF, 0x7FFF
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x74BF, 0x7FFF], [0x0, 0x100, 0x200, 0x300, 0x400, 0x600, 0x800, 0xA00, 0xF00]] # TODO: JUST TESTING: THIS WILL GET CHANGED
             stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
       else: # Stock
         # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
