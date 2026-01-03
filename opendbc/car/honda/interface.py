@@ -304,8 +304,8 @@ class CarInterface(CarInterfaceBase):
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
             # modified request output values: 0x0000, 0x0F00, 0x1E00, 0x2D00, 0x3C00, 0x4B00, 0x5A00, 0x6900, 0x7800
             stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 30720], [0, 3840]] # TODO: Verify this is stable
-            stock_cp.lateralTuning.pid.kf = 0.000035
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.15], [0.05]]
+            stock_cp.lateralTuning.pid.kf = 0.00002
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.075], [0.025]]
       else: # Stock
         # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
