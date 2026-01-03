@@ -122,6 +122,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.gas = 0.0
     self.brake = 0.0
     self.last_torque = 0.0
+    self.torque_lpf = 0.0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     MadsCarController.update(self, self.CP, CC, CC_SP)
@@ -137,8 +138,22 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       accel = 0.0
       gas, brake = 0.0, 0.0
 
-    # *** rate limit steer ***
-    limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
+    # *** rate limit steer (with low-pass filter) ***
+    torque_cmd = actuators.torque
+
+    # Only filter while lateral is active; otherwise keep state sane
+    if CC.latActive:
+      tau = 0.30  # seconds; try 0.20–0.40
+      alpha = DT_CTRL / (tau + DT_CTRL)
+      self.torque_lpf = alpha * torque_cmd + (1.0 - alpha) * self.torque_lpf
+      torque_cmd = self.torque_lpf
+    else:
+      # prevent "snap" when re-engaging
+      self.torque_lpf = 0.0
+      self.last_torque = 0.0
+
+    limited_torque = rate_limit(torque_cmd, self.last_torque,
+                                -self.params.STEER_DELTA_DOWN * DT_CTRL,
                                 self.params.STEER_DELTA_UP * DT_CTRL)
     self.last_torque = limited_torque
 
