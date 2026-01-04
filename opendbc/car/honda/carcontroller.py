@@ -143,7 +143,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
     # Only filter while lateral is active; otherwise keep state sane
     if CC.latActive:
-      tau = 0.25  # seconds; try 0.20–0.40
+      tau = 0.3  # seconds; try 0.20–0.40
       alpha = DT_CTRL / (tau + DT_CTRL)
       self.torque_lpf = alpha * torque_cmd + (1.0 - alpha) * self.torque_lpf
       torque_cmd = self.torque_lpf
