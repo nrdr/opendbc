@@ -302,14 +302,14 @@ class CarInterface(CarInterfaceBase):
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
             # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x3C00
             stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840], [0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840]] # TODO: Verify this is stable
-            stock_cp.lateralTuning.pid.kf = 0.00003
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.15], [0.05]]
+            stock_cp.lateralTuning.pid.kf = 0.000015
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.075], [0.025]]
           elif fw.ecu == "eps" and b"-" in fw.fwVersion and b"," in fw.fwVersion: # Linear Max
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
             # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x7800
             stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840], [0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840]] # TODO: Verify this is stable
-            stock_cp.lateralTuning.pid.kf = 0.00003
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.15], [0.05]]
+            stock_cp.lateralTuning.pid.kf = 0.000015
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.075], [0.025]]
       else: # Stock
         # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
