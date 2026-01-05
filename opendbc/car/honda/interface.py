@@ -270,11 +270,9 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
       if ret.flags & HondaFlagsSP.EPS_MODIFIED:
-        stock_cp.lateralParams.torqueBP = [0, 896, 2048, 3072, 3766, 4270, 4608, 18685, 32762]
-        stock_cp.lateralParams.torqueV  = [0, 236, 608, 1060, 1524, 1992, 2564, 3576, 3840]
-        stock_cp.lateralTuning.pid.kpV = [0.0732]
-        stock_cp.lateralTuning.pid.kiV = [0.0219]
-        stock_cp.lateralTuning.pid.kf = 0.000014
+         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]] # TODO: Verify this is stable
+         stock_cp.lateralTuning.pid.kf = 0.000025
+         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.075], [0.025]]
 
     elif candidate == CAR.HONDA_CIVIC_2022:
       if ret.flags & HondaFlagsSP.EPS_MODIFIED:
@@ -301,15 +299,15 @@ class CarInterface(CarInterfaceBase):
           if fw.ecu == "eps" and b"-" not in fw.fwVersion and b"," in fw.fwVersion: # 3X
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
             # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x3C00
-            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840], [0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840]] # TODO: Verify this is stable
-            stock_cp.lateralTuning.pid.kf = 0.000036
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.135], [0.045]]
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]] # TODO: Verify this is stable
+            stock_cp.lateralTuning.pid.kf = 0.000025
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.075], [0.025]]
           elif fw.ecu == "eps" and b"-" in fw.fwVersion and b"," in fw.fwVersion: # Linear Max
             # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
             # modified request output values: 0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x7800
-            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840], [0, 256, 512, 768, 1024, 1536, 2048, 2560, 3840]] # TODO: Verify this is stable
-            stock_cp.lateralTuning.pid.kf = 0.000036
-            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.135], [0.045]]
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]] # TODO: Verify this is stable
+            stock_cp.lateralTuning.pid.kf = 0.000025
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.075], [0.025]]
       else: # Stock
         # stock request output values:    0x0000, 0x0580, 0x0A00, 0x0D00, 0x0F00, 0x10C0, 0x11FF, 0x1300, 0x1400
         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
