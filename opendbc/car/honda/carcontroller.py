@@ -1,9 +1,6 @@
-<<<<<<< HEAD
-=======
 import numpy as np
 import math
 
->>>>>>> aeacf761f (self-learning gas pedal)
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, rate_limit, make_tester_present_msg, structs
 from opendbc.car.honda import hondacan
