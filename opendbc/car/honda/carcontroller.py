@@ -224,8 +224,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, CC.latActive))
 
     # wind brake from air resistance decel at high speed
-    wind_brake = np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15]) # not in m/s2 units
-    wind_brake_ms2 = np.interp(CS.out.vEgo, [0.0, 13.4, 22.4, 31.3, 40.2], [0.000, 0.049, 0.136, 0.267, 0.441]) # in m/s2 units
+    wind_brake = float(np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15]))  # not in m/s2 units
+    wind_brake_ms2 = float(np.interp(CS.out.vEgo, [0.0, 13.4, 22.4, 31.3, 40.2], [0.000, 0.049, 0.136, 0.267, 0.441]))  # in m/s2 units
 
     # all of this is only relevant for HONDA NIDEC
     max_accel = interp(CS.out.vEgo, self.params.NIDEC_MAX_ACCEL_BP, self.params.NIDEC_MAX_ACCEL_V)
@@ -276,30 +276,41 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           if (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
             gas_error = self.accel - CS.out.aEgo
             if gas_error != 0.0 and gas_pedal_force > 0.0:
-              self.gasfactor = np.clip(self.gasfactor + gas_error / 50 * gas_pedal_force, 0.1, 3.0)
+              self.gasfactor = float(np.clip(self.gasfactor + gas_error / 50 * gas_pedal_force, 0.1, 3.0))
             if gas_error != 0.0 and (not CS.out.brakePressed) and (CS.out.vEgo > 0.0):
               wind_adjust = 1 + wind_brake_ms2 / 1000
-              self.windfactor = np.clip(self.windfactor * (wind_adjust if (gas_error > 0) else 1.0/wind_adjust), 0.1, 3.0)
-            if gas_pedal_force <= 0.0: # don't reduce windfactor while braking, allow increases
+              self.windfactor = float(np.clip(
+                self.windfactor * (wind_adjust if (gas_error > 0) else 1.0 / wind_adjust),
+                0.1, 3.0
+              ))
+            if gas_pedal_force <= 0.0:  # don't reduce windfactor while braking, allow increases
               self.windfactor = max(self.windfactor, self.windfactor_before_brake)
             else:
               self.windfactor_before_brake = self.windfactor
 
-          self.gas = float(np.interp(gas_pedal_force * self.gasfactor, self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
+          self.gas = float(np.interp(
+            gas_pedal_force * self.gasfactor,
+            self.params.BOSCH_GAS_LOOKUP_BP,
+            self.params.BOSCH_GAS_LOOKUP_V
+          ))
 
           stopping = actuators.longControlState == LongCtrlState.stopping
           self.stopping_counter = self.stopping_counter + 1 if stopping else 0
-          can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, CC.enabled, CC.longActive, self.accel, self.gas,
-                                                        self.stopping_counter, self.CP.carFingerprint, gas_pedal_force))
+          can_sends.extend(hondacan.create_acc_commands(
+            self.packer, self.CAN, CC.enabled, CC.longActive, self.accel, self.gas,
+            self.stopping_counter, self.CP.carFingerprint, gas_pedal_force
+          ))
         else:
           apply_brake = clip(self.brake_last - (wind_brake if self.brake_last <= 0.95 else 0.0), 0.0, 1.0)
           apply_brake = int(clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
           pump_on, self.last_pump_ts = brake_pump_hysteresis(apply_brake, self.apply_brake_last, self.last_pump_ts, ts)
 
           pcm_override = True
-          can_sends.append(hondacan.create_brake_command(self.packer, self.CAN, apply_brake, pump_on,
-                                                         pcm_override, pcm_cancel_cmd, alert_fcw,
-                                                         self.CP.carFingerprint, CS.stock_brake, self.CP_SP))
+          can_sends.append(hondacan.create_brake_command(
+            self.packer, self.CAN, apply_brake, pump_on,
+            pcm_override, pcm_cancel_cmd, alert_fcw,
+            self.CP.carFingerprint, CS.stock_brake, self.CP_SP
+          ))
           self.apply_brake_last = apply_brake
           self.brake = apply_brake / self.params.NIDEC_BRAKE_MAX
 
@@ -309,13 +320,17 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if self.frame % 10 == 0:
       if self.CP.openpilotLongitudinalControl:
         # On Nidec, this also controls longitudinal positive acceleration
-        can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, pcm_accel,
-                                                 hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud))
+        can_sends.append(hondacan.create_acc_hud(
+          self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, pcm_accel,
+          hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud
+        ))
 
       steering_available = CS.out.cruiseState.available and CS.out.vEgo > self.CP.minSteerSpeed
       reduced_steering = CS.out.steeringPressed
-      can_sends.extend(hondacan.create_lkas_hud(self.packer, self.CAN.lkas, self.CP, hud_control, CC.latActive,
-                                                steering_available, reduced_steering, alert_steer_required, CS.lkas_hud, self.dashed_lanes))
+      can_sends.extend(hondacan.create_lkas_hud(
+        self.packer, self.CAN.lkas, self.CP, hud_control, CC.latActive,
+        steering_available, reduced_steering, alert_steer_required, CS.lkas_hud, self.dashed_lanes
+      ))
 
       if self.CP.openpilotLongitudinalControl:
         # TODO: combining with create_acc_hud block above will change message order and will need replay logs regenerated
@@ -329,15 +344,16 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             self.gas = pcm_accel / self.params.NIDEC_GAS_MAX
 
     # Intelligent Cruise Button Management
-    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, self.packer, self.frame,
-                                                                       self.last_button_frame, self.CAN))
+    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(
+      self, CC_SP, self.packer, self.frame, self.last_button_frame, self.CAN
+    ))
 
     new_actuators = actuators.as_builder()
-    new_actuators.speed = self.speed
-    new_actuators.accel = self.accel
-    new_actuators.gas = self.gas
-    new_actuators.brake = self.brake
-    new_actuators.torque = self.last_torque
+    new_actuators.speed = float(self.speed)
+    new_actuators.accel = float(self.accel)
+    new_actuators.gas = float(self.gas)
+    new_actuators.brake = float(self.brake)
+    new_actuators.torque = float(self.last_torque)
     new_actuators.torqueOutputCan = apply_torque
 
     self.frame += 1
