@@ -135,6 +135,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Driver override behavior for steer LPF:
     # - while steeringPressed (and a short time after), force OP steer torque to 0
     #   and reset filter state so it doesn't "push back"
+    # Requested change: Only do the force-to-0 behavior below 20 mph
     self.driver_override_until_nanos = 0
     self.override_hold_s = 0.35  # try 0.20–0.50
 
@@ -162,12 +163,19 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Only filter while lateral is active; otherwise keep state sane
     if CC.latActive:
       steering_pressed = CS.out.steeringPressed
+      below_override_cutoff = CS.out.vEgo < (20.0 * CV.MPH_TO_MS)
 
-      # Latch override so OP doesn't instantly re-grab
-      if steering_pressed:
-        self.driver_override_until_nanos = now_nanos + int(self.override_hold_s * 1e9)
-
-      bypass = now_nanos < self.driver_override_until_nanos
+      # Only apply the "cut torque to 0" override behavior below 20 mph.
+      # Above that, use the existing/normal LPF behavior.
+      if below_override_cutoff:
+        # Latch override so OP doesn't instantly re-grab
+        if steering_pressed:
+          self.driver_override_until_nanos = now_nanos + int(self.override_hold_s * 1e9)
+        bypass = now_nanos < self.driver_override_until_nanos
+      else:
+        # Make sure a previously-latched low-speed override can't carry upward
+        self.driver_override_until_nanos = 0
+        bypass = False
 
       if bypass:
         # "Get out of the way" immediately
