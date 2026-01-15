@@ -157,7 +157,7 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
   else:
     # Shows the distance bars, TODO: stock camera shows updates temporarily while disabled
     acc_hud_values['ACC_ON'] = int(enabled)
-    acc_hud_values['PCM_SPEED'] = 255
+    acc_hud_values['PCM_SPEED'] = 255 # Test
     acc_hud_values['PCM_GAS'] = pcm_accel
     acc_hud_values['SET_ME_X01'] = 1
     acc_hud_values['FCM_OFF'] = 0
