@@ -5,6 +5,8 @@ from opendbc.car.honda.values import CAR, CruiseButtons, HONDA_BOSCH, HONDA_BOSC
                                      HONDA_NIDEC_ALT_PCM_ACCEL, CarControllerParams
 from opendbc.car.interfaces import CarControllerBase
 
+from opendbc.car.common.conversions import Conversions as CV
+
 from opendbc.roenpilot.common.numpy_fast import clip, interp
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
@@ -122,6 +124,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.gas = 0.0
     self.brake = 0.0
     self.last_torque = 0.0
+    self.torque_lpf = 0.0
+    # Only do the force-to-0 behavior below 20 mph
+    self.driver_override_until_nanos = 0
+    self.override_hold_s = 0.35  # try 0.20–0.50
 
   def update(self, CC, CC_SP, CS, now_nanos):
     MadsCarController.update(self, self.CP, CC, CC_SP)
@@ -137,9 +143,52 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       accel = 0.0
       gas, brake = 0.0, 0.0
 
+    torque_cmd = actuators.torque
+
+    # Only filter while lateral is active; otherwise keep state sane
+    if CC.latActive:
+      steering_pressed = CS.out.steeringPressed
+      below_override_cutoff = CS.out.vEgo < (20.0 * CV.MPH_TO_MS)
+
+      # Only apply the "drop all torque" override behavior below 20 mph.
+      if below_override_cutoff:
+        # Latch override so OP doesn't instantly re-grab
+        if steering_pressed:
+          self.driver_override_until_nanos = now_nanos + int(self.override_hold_s * 1e9)
+        bypass = now_nanos < self.driver_override_until_nanos
+      else:
+        # Prevent a low-speed override from carrying upward
+        self.driver_override_until_nanos = 0
+        bypass = False
+
+      if bypass:
+        # Immediately get out of the way
+        torque_cmd = 0.0
+        self.torque_lpf = 0.0
+        self.last_torque = 0.0
+      else:
+        tau = 0.20  # seconds; try 0.20–0.40
+        alpha = DT_CTRL / (tau + DT_CTRL)
+
+        # Don’t smear through sign flips
+        if torque_cmd * self.torque_lpf < 0:
+          self.torque_lpf = torque_cmd
+        else:
+          self.torque_lpf = alpha * torque_cmd + (1.0 - alpha) * self.torque_lpf
+
+        torque_cmd = self.torque_lpf
+    else:
+      # Prevent snap when re-engaging lateral
+      self.torque_lpf = 0.0
+      self.last_torque = 0.0
+      self.driver_override_until_nanos = 0
+
     # *** rate limit steer ***
-    limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
-                                self.params.STEER_DELTA_UP * DT_CTRL)
+    limited_torque = rate_limit(
+      torque_cmd, self.last_torque,
+      -self.params.STEER_DELTA_DOWN * DT_CTRL,
+      self.params.STEER_DELTA_UP * DT_CTRL
+    )
     self.last_torque = limited_torque
 
     # *** apply brake hysteresis ***
