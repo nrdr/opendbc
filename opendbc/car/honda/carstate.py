@@ -1,6 +1,8 @@
 import numpy as np
 from collections import defaultdict
 
+from openpilot.common.params import Params
+
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
@@ -25,6 +27,8 @@ class CarState(CarStateBase, CarStateExt):
     CarStateBase.__init__(self, CP, CP_SP)
     CarStateExt.__init__(self, CP, CP_SP)
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
+
+    self.params = Params()
 
     if CP.transmissionType != TransmissionType.manual:
       self.gearbox_msg = "GEARBOX_AUTO"
@@ -174,7 +178,14 @@ class CarState(CarStateBase, CarStateExt):
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
 
     ret.steeringTorque = cp.vl["STEER_STATUS"]["STEER_TORQUE_SENSOR"]
-    ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
+    steer_threshold = STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
+    if self.params.get_bool("NrdrIncreaseOverrideTolerance") and self.CP.carFingerprint in (
+      CAR.HONDA_CLARITY,
+      CAR.HONDA_CIVIC,
+      CAR.HONDA_CIVIC_BOSCH,
+    ):
+      steer_threshold *= 2
+    ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
 
     if self.CP.carFingerprint in HONDA_BOSCH:
       # The PCM always manages its own cruise control state, but doesn't publish it
