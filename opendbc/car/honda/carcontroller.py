@@ -143,27 +143,13 @@ def get_eps_modified_steering_pressed(raw_pressed, steering_torque, torque_cmd, 
   filter_s = min(1.0, filter_s + DT_CTRL)
   return filter_s, filter_s >= 0.28
 
-def torque_lpf_tau(torque_cmd: float, prev_torque_cmd: float, v_ego: float) -> float:
-  torque_delta = abs(float(torque_cmd) - float(prev_torque_cmd))
-  sign_change = (float(torque_cmd) * float(prev_torque_cmd)) < 0.0
-  highway = v_ego > 50.0 * CV.MPH_TO_MS
-
-  if v_ego < 10.0:
-    return float(np.interp(v_ego, [0.0, 10.0], [0.02, 0.10]))
-
-  if highway:
-    if sign_change and torque_delta > 0.20:
-      return 0.1
-    return 0.12
-
-  if torque_delta > 0.50:
-    return 0.1
-  elif torque_delta > 0.20:
-    return 0.11
-  elif torque_delta > 0.05:
-    return 0.12
-  else:
-    return 0.15
+def torque_lpf_tau(v_ego: float, low_tau: float, standard_tau: float, highway_tau: float) -> float:
+  # Speed-banded low-pass filter time constant (seconds), fully tunable from the UI.
+  if v_ego < 25.0 * CV.MPH_TO_MS:
+    return low_tau
+  if v_ego < 50.0 * CV.MPH_TO_MS:
+    return standard_tau
+  return highway_tau
 
 
 class HondaParamWriter:
@@ -266,17 +252,20 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
   def _get_live_tuning_params(self):
     return {
-      "override_fade_down_s": get_param_float(self.param_reader, "HondaOverrideFadeDownSecs", 2.0, 0.0, 10.0),
-      "override_fade_up_s": get_param_float(self.param_reader, "HondaOverrideFadeUpSecs", 2.0, 0.0, 10.0),
+      "override_fade_down_s": get_param_float(self.param_reader, "HondaOverrideFadeDownSecs", 0.0, 0.0, 10.0),
+      "override_fade_up_s": get_param_float(self.param_reader, "HondaOverrideFadeUpSecs", 1.5, 0.0, 10.0),
       "override_torque_scale": get_param_float(self.param_reader, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
-      "lkas_active_during_override": get_param_bool(self.param_reader, "HondaLkasActiveDuringOverride", True),
-      "live_learning_gas": get_param_bool(self.param_reader, "HondaLiveLearningGas", True),
-      "torque_lpf_enabled": get_param_bool(self.param_reader, "HondaTorqueLowPassFilter", False),
-      "steer_delta_limiter_enabled": get_param_bool(self.param_reader, "HondaSteerDeltaLimiter", True),
+      "driver_assist_during_override": get_param_bool(self.param_reader, "HondaDriverAssistDuringOverride", True),
+      "live_learning_gas": get_param_bool(self.param_reader, "HondaLiveLearningGas", False),
+      "torque_lpf_enabled": get_param_bool(self.param_reader, "HondaTorqueLowPassFilter", True),
+      "lpf_tau_low": get_param_float(self.param_reader, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
+      "lpf_tau_standard": get_param_float(self.param_reader, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
+      "lpf_tau_highway": get_param_float(self.param_reader, "HondaLpfTauHighway", 0.1, 0.0, 5.0),
+      "steer_delta_limiter_enabled": get_param_bool(self.param_reader, "HondaSteerDeltaLimiter", False),
       "steer_delta_up": get_param_float(self.param_reader, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
       "steer_delta_down": get_param_float(self.param_reader, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
       "stopping_decel_rate": get_param_float(self.param_reader, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
-      "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", False),
+      "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", True),
     }
 
   def _update_steering_torque(self, CC, CS, live):
@@ -302,7 +291,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       torque_cmd *= self.override_ramp
 
       if live["torque_lpf_enabled"]:
-        tau = torque_lpf_tau(torque_cmd, self.prev_torque_cmd, CS.out.vEgo)
+        tau = torque_lpf_tau(CS.out.vEgo, live["lpf_tau_low"], live["lpf_tau_standard"], live["lpf_tau_highway"])
         alpha = DT_CTRL / (tau + DT_CTRL)
         self.torque_lpf = alpha * torque_cmd + (1.0 - alpha) * self.torque_lpf
         torque_cmd = self.torque_lpf
@@ -328,7 +317,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.lat_active_prev = CC.latActive
     self.steering_pressed_prev = steering_pressed
 
-    lkas_active = CC.latActive and (live["lkas_active_during_override"] or not steering_pressed)
+    # "Driver assist during override" ON  -> openpilot gives way while you steer (LKAS torque drops out).
+    # OFF -> openpilot keeps applying torque during override (more resistant).
+    lkas_active = CC.latActive and (not live["driver_assist_during_override"] or not steering_pressed)
     return limited_torque, lkas_active
 
   def update(self, CC, CC_SP, CS, now_nanos):
