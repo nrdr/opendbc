@@ -122,6 +122,22 @@ def process_hud_alert(hud_alert):
 
   return alert_fcw, alert_steer_required
 
+def get_eps_modified_steering_pressed(CP, CS, torque_cmd, filter_s, previous_pressed):
+  raw_pressed = bool(CS.out.steeringPressed)
+  steering_torque = float(getattr(CS.out, "steeringTorque", 0.0))
+  torque_cmd = float(torque_cmd)
+
+  if not raw_pressed:
+    return 0.0, False
+
+  torque_product = steering_torque * torque_cmd
+  torque_cmd_abs = abs(torque_cmd)
+
+  if previous_pressed or torque_cmd_abs < 0.10 or torque_product < 0.0:
+    return 1.0, True
+
+  filter_s = min(1.0, filter_s + DT_CTRL)
+  return filter_s, filter_s >= 0.28
 
 def torque_lpf_tau(torque_cmd: float, prev_torque_cmd: float, v_ego: float) -> float:
   torque_delta = abs(float(torque_cmd) - float(prev_torque_cmd))
