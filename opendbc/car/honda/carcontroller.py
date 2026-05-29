@@ -122,9 +122,9 @@ def process_hud_alert(hud_alert):
 
   return alert_fcw, alert_steer_required
 
-def get_eps_modified_steering_pressed(CP, CS, torque_cmd, filter_s, previous_pressed):
-  raw_pressed = bool(CS.out.steeringPressed)
-  steering_torque = float(getattr(CS.out, "steeringTorque", 0.0))
+def get_eps_modified_steering_pressed(raw_pressed, steering_torque, torque_cmd, filter_s, previous_pressed):
+  raw_pressed = bool(raw_pressed)
+  steering_torque = float(steering_torque)
   torque_cmd = float(torque_cmd)
 
   if not raw_pressed:
