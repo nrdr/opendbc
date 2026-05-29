@@ -7,6 +7,7 @@ from openpilot.common.params import Params
 
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, rate_limit, make_tester_present_msg, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda import hondacan
 from opendbc.car.honda.values import CAR, CruiseButtons, HONDA_BOSCH, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS, \
                                      HONDA_BOSCH_TJA_CONTROL, HONDA_NIDEC_ALT_PCM_ACCEL, CarControllerParams
@@ -19,6 +20,30 @@ from opendbc.sunnypilot.car.honda.icbm import IntelligentCruiseButtonManagementI
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
+
+
+def get_param_bool(params, key, default=False):
+  value = params.get(key)
+  if value is None:
+    return default
+  return params.get_bool(key)
+
+
+def get_param_float(params, key, default, min_value=None, max_value=None, scale=1.0):
+  value = params.get(key)
+  if value is None:
+    ret = default
+  else:
+    try:
+      ret = float(value.decode("utf-8")) / scale
+    except (AttributeError, TypeError, ValueError):
+      ret = default
+
+  if min_value is not None:
+    ret = max(min_value, ret)
+  if max_value is not None:
+    ret = min(max_value, ret)
+  return ret
 
 
 def compute_gb_honda_bosch(accel, speed):
@@ -98,6 +123,29 @@ def process_hud_alert(hud_alert):
   return alert_fcw, alert_steer_required
 
 
+def torque_lpf_tau(torque_cmd: float, prev_torque_cmd: float, v_ego: float) -> float:
+  torque_delta = abs(float(torque_cmd) - float(prev_torque_cmd))
+  sign_change = (float(torque_cmd) * float(prev_torque_cmd)) < 0.0
+  highway = v_ego > 50.0 * CV.MPH_TO_MS
+
+  if v_ego < 10.0:
+    return float(np.interp(v_ego, [0.0, 10.0], [0.02, 0.10]))
+
+  if highway:
+    if sign_change and torque_delta > 0.20:
+      return 0.1
+    return 0.12
+
+  if torque_delta > 0.50:
+    return 0.1
+  elif torque_delta > 0.20:
+    return 0.11
+  elif torque_delta > 0.05:
+    return 0.12
+  else:
+    return 0.15
+
+
 class HondaParamWriter:
   def __init__(self):
     self._params = Params()
@@ -133,6 +181,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.params = CarControllerParams(CP)
     self.CAN = hondacan.CanBus(CP)
     self.tja_control = CP.carFingerprint in HONDA_BOSCH_TJA_CONTROL
+    self.param_reader = Params()
     self.param_writer = HondaParamWriter()
 
     self.braking = False
@@ -149,11 +198,19 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.last_torque = 0.0
     self.bosch_last_gas = 0
 
-    self.gasfactor = 1.0 if (Params().get("HondaGasFactorParams") is None) else Params().get("HondaGasFactorParams")
+    self.gasfactor = get_param_float(self.param_reader, "HondaGasFactorParams", 1.0, 0.1, 3.0)
     self.gasfactor_before_maxgas = self.gasfactor
-    self.windfactor = 1.0 if (Params().get("HondaWindFactorParams") is None) else Params().get("HondaWindFactorParams")
+    self.windfactor = get_param_float(self.param_reader, "HondaWindFactorParams", 1.0, 0.1, 5.0)
     self.windfactor_before_maxgas = self.windfactor_before_brake = self.windfactor
     self.pitch = 0.0
+
+    self.torque_lpf = 0.0
+    self.prev_torque_cmd = 0.0
+    self.override_ramp = 1.0
+    self.lat_active_prev = False
+    self.steering_pressed_prev = False
+    self.steering_pressed_filter_s = 0.0
+    self.steering_pressed_robust_prev = False
 
     # Bosch extra-brake controller
     self.brake_pid = PIDController(k_p=([0,], [0,]),
@@ -163,8 +220,99 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                    rate=50)
     self.brake_pid.reset()
 
+  def _filtered_steering_pressed(self, CS, torque_cmd: float) -> bool:
+    raw_pressed = bool(CS.out.steeringPressed)
+    steering_torque = float(getattr(CS.out, "steeringTorque", 0.0))
+    torque_cmd = float(torque_cmd)
+
+    if not raw_pressed:
+      self.steering_pressed_filter_s = 0.0
+      self.steering_pressed_robust_prev = False
+      return False
+
+    torque_product = steering_torque * torque_cmd
+    torque_cmd_abs = abs(torque_cmd)
+
+    if self.steering_pressed_robust_prev or torque_cmd_abs < 0.10 or torque_product < 0.0:
+      self.steering_pressed_filter_s = 1.0
+      self.steering_pressed_robust_prev = True
+      return True
+
+    self.steering_pressed_filter_s = min(1.0, self.steering_pressed_filter_s + DT_CTRL)
+    steering_pressed = self.steering_pressed_filter_s >= 0.28
+
+    self.steering_pressed_robust_prev = steering_pressed
+    return steering_pressed
+
+  def _get_live_tuning_params(self):
+    return {
+      "override_fade_down_s": get_param_float(self.param_reader, "HondaOverrideFadeDownSecs", 2.0, 0.0, 10.0),
+      "override_fade_up_s": get_param_float(self.param_reader, "HondaOverrideFadeUpSecs", 2.0, 0.0, 10.0),
+      "lkas_active_during_override": get_param_bool(self.param_reader, "HondaLkasActiveDuringOverride", True),
+      "live_learning_gas": get_param_bool(self.param_reader, "HondaLiveLearningGas", True),
+      "torque_lpf_enabled": get_param_bool(self.param_reader, "HondaTorqueLowPassFilter", False),
+      "steer_delta_limiter_enabled": get_param_bool(self.param_reader, "HondaSteerDeltaLimiter", True),
+      "steer_delta_up": get_param_float(self.param_reader, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
+      "steer_delta_down": get_param_float(self.param_reader, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
+      "stopping_decel_rate": get_param_float(self.param_reader, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
+      "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", False),
+    }
+
+  def _update_steering_torque(self, CC, CS, live):
+    torque_cmd = float(CC.actuators.torque) if CC.latActive else 0.0
+    steering_pressed = False
+
+    if CC.latActive:
+      if live["increase_override_tolerance"]:
+        steering_pressed = self._filtered_steering_pressed(CS, torque_cmd)
+      else:
+        steering_pressed = bool(CS.out.steeringPressed)
+
+      if not self.lat_active_prev:
+        self.override_ramp = 0.0
+
+      if steering_pressed:
+        fade_down_s = live["override_fade_down_s"]
+        self.override_ramp = 0.0 if fade_down_s <= 0.0 else max(0.0, self.override_ramp - DT_CTRL / fade_down_s)
+      else:
+        fade_up_s = live["override_fade_up_s"]
+        self.override_ramp = 1.0 if fade_up_s <= 0.0 else min(1.0, self.override_ramp + DT_CTRL / fade_up_s)
+
+      torque_cmd *= self.override_ramp
+
+      if live["torque_lpf_enabled"]:
+        tau = torque_lpf_tau(torque_cmd, self.prev_torque_cmd, CS.out.vEgo)
+        alpha = DT_CTRL / (tau + DT_CTRL)
+        self.torque_lpf = alpha * torque_cmd + (1.0 - alpha) * self.torque_lpf
+        torque_cmd = self.torque_lpf
+      else:
+        self.torque_lpf = torque_cmd
+
+      self.prev_torque_cmd = torque_cmd
+    else:
+      self.override_ramp = 0.0
+      self.torque_lpf = 0.0
+      self.prev_torque_cmd = 0.0
+      self.steering_pressed_filter_s = 0.0
+      self.steering_pressed_robust_prev = False
+
+    if live["steer_delta_limiter_enabled"]:
+      limited_torque = rate_limit(torque_cmd, self.last_torque,
+                                  -live["steer_delta_down"] * DT_CTRL,
+                                  live["steer_delta_up"] * DT_CTRL)
+    else:
+      limited_torque = torque_cmd
+
+    self.last_torque = limited_torque
+    self.lat_active_prev = CC.latActive
+    self.steering_pressed_prev = steering_pressed
+
+    lkas_active = CC.latActive and (live["lkas_active_during_override"] or not steering_pressed)
+    return limited_torque, lkas_active
+
   def update(self, CC, CC_SP, CS, now_nanos):
     MadsCarController.update(self, self.CP, CC, CC_SP)
+    live = self._get_live_tuning_params()
     gas_pedal_force = 0.0
     actuators = CC.actuators
     hud_control = CC.hudControl
@@ -184,17 +332,16 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       accel = 0.0
       gas, brake = 0.0, 0.0
 
-    # *** rate limit steer ***
-    limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
-                                self.params.STEER_DELTA_UP * DT_CTRL)
-    self.last_torque = limited_torque
+    # *** rate limit / filter steer ***
+    limited_torque, lkas_active = self._update_steering_torque(CC, CS, live)
 
     # *** apply brake hysteresis ***
     pre_limit_brake, self.braking, self.brake_steady = actuator_hysteresis(brake, self.braking, self.brake_steady,
                                                                            CS.out.vEgo, self.CP.carFingerprint)
 
     # *** rate limit after the enable check ***
-    self.brake_last = rate_limit(pre_limit_brake, self.brake_last, -2., 3 * DT_CTRL)
+    brake_rate_up = live["stopping_decel_rate"] if actuators.longControlState == LongCtrlState.stopping else 3.0
+    self.brake_last = rate_limit(pre_limit_brake, self.brake_last, -2., brake_rate_up * DT_CTRL)
 
     # vehicle hud display, wait for one update from 10Hz 0x304 msg
     alert_fcw, alert_steer_required = process_hud_alert(hud_control.visualAlert)
@@ -216,7 +363,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         can_sends.append(make_tester_present_msg(0x18DAB0F1, self.CAN.pt, suppress_response=True))
 
     # Send steering command.
-    can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, CC.latActive, self.tja_control))
+    can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, lkas_active, self.tja_control))
 
     # wind brake from air resistance decel at high speed
     wind_brake = np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15]) * self.windfactor # not in m/s2 units
@@ -285,7 +432,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           gas_pedal_force = self.accel + wind_brake_ms2 * self.windfactor + hill_brake
 
           # live-learn gas pedal adjustments when openpilot is controlling gas
-          if (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
+          if live["live_learning_gas"] and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
             gas_error = self.accel - CS.out.aEgo
             if gas_error != 0.0 and gas_pedal_force > 0.0:
               if self.CP.carFingerprint == CAR.HONDA_INSIGHT: # Insight gas pedal reacts too slowly
@@ -307,14 +454,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             else:
               self.windfactor_before_brake = self.windfactor
             if gas_pedal_force >= self.params.BOSCH_ACCEL_MAX: # don't increase gasfactor nor windfactor at accel max, allow decreases
-              self.gasfactor = min(self.gasfactor, self.gasfactor_before_gasmax)
-              self.windfactor = min(self.windfactor, self.windfactor_before_gasmax)
+              self.gasfactor = min(self.gasfactor, self.gasfactor_before_maxgas)
+              self.windfactor = min(self.windfactor, self.windfactor_before_maxgas)
             else:
-              self.gasfactor_before_gasmax = self.gasfactor
-              self.windfactor_before_gasmax = self.windfactor
+              self.gasfactor_before_maxgas = self.gasfactor
+              self.windfactor_before_maxgas = self.windfactor
           self.gas = float(np.interp(gas_pedal_force * self.gasfactor, self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
 
-          # limit gas ramp to 60 units per frame, matches stock.  Higher sometimes causes powertrain to ignore gas command.
+          # limit gas ramp to 60 units per frame, matches stock. Higher sometimes causes powertrain to ignore gas command.
           max_gas = max(60, self.bosch_last_gas + 60)
           self.gas = min(self.gas, max_gas)
           self.bosch_last_gas = self.gas
@@ -336,7 +483,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.brake = apply_brake / self.params.NIDEC_BRAKE_MAX
 
           gas_error = actuators.accel - CS.out.aEgo
-          if (not CS.out.gasPressed) and (actuators.longControlState == LongCtrlState.pid) and self.CP_SP.enableGasInterceptor:
+          if live["live_learning_gas"] and (not CS.out.gasPressed) and (actuators.longControlState == LongCtrlState.pid) and self.CP_SP.enableGasInterceptor:
             if gas_error != 0.0 and gas > 0.0:
               self.gasfactor = np.clip(self.gasfactor + gas_error / 150 * (gas * 4.8), 0.1, 3.0)
             if gas_error != 0.0 and (not CS.out.brakePressed) and (CS.out.vEgo > 0.0):
