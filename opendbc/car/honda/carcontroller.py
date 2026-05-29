@@ -248,6 +248,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     return {
       "override_fade_down_s": get_param_float(self.param_reader, "HondaOverrideFadeDownSecs", 2.0, 0.0, 10.0),
       "override_fade_up_s": get_param_float(self.param_reader, "HondaOverrideFadeUpSecs", 2.0, 0.0, 10.0),
+      "override_torque_scale": get_param_float(self.param_reader, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
       "lkas_active_during_override": get_param_bool(self.param_reader, "HondaLkasActiveDuringOverride", True),
       "live_learning_gas": get_param_bool(self.param_reader, "HondaLiveLearningGas", True),
       "torque_lpf_enabled": get_param_bool(self.param_reader, "HondaTorqueLowPassFilter", False),
@@ -273,7 +274,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
       if steering_pressed:
         fade_down_s = live["override_fade_down_s"]
-        self.override_ramp = 0.0 if fade_down_s <= 0.0 else max(0.0, self.override_ramp - DT_CTRL / fade_down_s)
+        self.override_ramp = live["override_torque_scale"] if fade_down_s <= 0.0 else max(live["override_torque_scale"], self.override_ramp - DT_CTRL / fade_down_s)
       else:
         fade_up_s = live["override_fade_up_s"]
         self.override_ramp = 1.0 if fade_up_s <= 0.0 else min(1.0, self.override_ramp + DT_CTRL / fade_up_s)
