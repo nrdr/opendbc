@@ -302,7 +302,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "override_fade_up_s": get_param_float(self.param_reader, "HondaOverrideFadeUpSecs", 1.5, 0.0, 10.0),
       "override_torque_scale": get_param_float(self.param_reader, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
       "driver_assist_during_override": get_param_bool(self.param_reader, "HondaDriverAssistDuringOverride", True),
-      "live_learning_gas": get_param_bool(self.param_reader, "HondaLiveLearningGas", False),
+      # Default ON for Bosch (gas learns well), OFF for Nidec; only applies when unset.
+      "live_learning_gas": get_param_bool(self.param_reader, "HondaLiveLearningGas", self.CP.carFingerprint in HONDA_BOSCH),
       "torque_lpf_enabled": get_param_bool(self.param_reader, "HondaTorqueLowPassFilter", True),
       "lpf_tau_low": get_param_float(self.param_reader, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
       "lpf_tau_standard": get_param_float(self.param_reader, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
