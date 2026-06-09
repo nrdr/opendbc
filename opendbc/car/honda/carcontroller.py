@@ -316,6 +316,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "steer_delta_down": get_param_float(self.param_reader, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
       "stopping_decel_rate": get_param_float(self.param_reader, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
       "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", True),
+      "alt_dashboard": get_param_bool(self.param_reader, "HondaAltDashboard", False),
     }
 
   def _update_steering_torque(self, CC, CS, live):
@@ -575,8 +576,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
       if self.CP.openpilotLongitudinalControl:
         # On Nidec, this also controls longitudinal positive acceleration
+        # Alternative Dashboard: show the lead's speed (in the cluster's display unit) in
+        # place of set speed. v_cruise_factor matches the hud_v_cruise conversion above.
+        lead_speed_display = hud_control.leadVLead / CS.v_cruise_factor if CS.v_cruise_factor else 0.0
         can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, pcm_accel,
-                                                 hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control))
+                                                 hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
+                                                 alt_dashboard=live["alt_dashboard"], lead_speed_display=lead_speed_display))
 
       steering_available = CS.out.cruiseState.available and CS.out.vEgo > max(self.params.STEER_GLOBAL_MIN_SPEED, self.CP.minSteerSpeed)
       reduced_steering = CS.out.steeringPressed

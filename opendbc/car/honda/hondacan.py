@@ -143,24 +143,56 @@ def create_bosch_supplemental_1(packer, CAN):
   return packer.make_can_msg("BOSCH_SUPPLEMENTAL_1", CAN.lkas, values)
 
 
-def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control):
+def _alt_dashboard_hud_distance(lead_visible, lead_distance_m):
+  # Map lead range to Honda's distance bars so they "close in" as the lead approaches.
+  # Cluster mapping: value 0 -> 4 bars (far/none), 1 -> 1 bar, 2 -> 2 bars, 3 -> 3 bars.
+  if not lead_visible or lead_distance_m <= 0.0:
+    return 0       # no / far lead -> 4 bars
+  if lead_distance_m < 10.0:
+    return 1       # very close -> 1 bar
+  if lead_distance_m < 20.0:
+    return 2       # 2 bars
+  if lead_distance_m < 30.0:
+    return 3       # 3 bars
+  return 0         # >= 30 m -> 4 bars
+
+
+def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
+                   alt_dashboard=False, lead_speed_display=0.0):
+  cruise_speed = hud_v_cruise
+  hud_distance = hud_control.leadDistanceBars % 4  # 1/2/3 bars; econ -> 4 wraps to 0 which the cluster shows as 4 bars
+  send_acc_on = True
+
+  if alt_dashboard:
+    # Repurpose the ACC cluster as a live lead display.
+    send_acc_on = False  # don't light the ACC indicator; we're showing lead info instead
+    if not hud_control.leadVisible:
+      cruise_speed = 253  # "--": engaged with no lead present
+    elif hud_control.leadVLead < CV.MPH_TO_MS:  # lead below 1 mph
+      cruise_speed = 252  # "Stopped"
+    else:
+      cruise_speed = min(251, max(0, int(round(lead_speed_display))))  # lead speed (keep clear of 252/253)
+    hud_distance = _alt_dashboard_hud_distance(hud_control.leadVisible, hud_control.leadDistance)
+
   acc_hud_values = {
-    'CRUISE_SPEED': hud_v_cruise,
+    'CRUISE_SPEED': cruise_speed,
     'ENABLE_MINI_CAR': 1 if enabled else 0,
     # only moves the lead car without ACC_ON
-    'HUD_DISTANCE': hud_control.leadDistanceBars,  # wraps to 0 at 4 bars
+    'HUD_DISTANCE': hud_distance,
     'IMPERIAL_UNIT': int(not is_metric),
     'HUD_LEAD': 2 if enabled and hud_control.leadVisible else 1 if enabled else 0,
     'SET_ME_X01_2': 1,
   }
 
   if CP.carFingerprint in HONDA_BOSCH:
-    acc_hud_values['ACC_ON'] = int(enabled)
+    if send_acc_on:
+      acc_hud_values['ACC_ON'] = int(enabled)
     acc_hud_values['FCM_OFF'] = 1
     acc_hud_values['FCM_OFF_2'] = 1
   else:
     # Shows the distance bars, TODO: stock camera shows updates temporarily while disabled
-    acc_hud_values['ACC_ON'] = int(enabled)
+    if send_acc_on:
+      acc_hud_values['ACC_ON'] = int(enabled)
     acc_hud_values['PCM_SPEED'] = pcm_speed * CV.MS_TO_KPH
     acc_hud_values['PCM_GAS'] = pcm_accel
     acc_hud_values['SET_ME_X01'] = speed_control if (CP.flags & HondaFlags.HYBRID) and (CP.carFingerprint in (CAR.ACURA_MDX_3G_MMR)) else 1
