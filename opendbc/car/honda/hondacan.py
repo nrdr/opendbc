@@ -143,6 +143,12 @@ def create_bosch_supplemental_1(packer, CAN):
   return packer.make_can_msg("BOSCH_SUPPLEMENTAL_1", CAN.lkas, values)
 
 
+# Alternative Dashboard modes (HondaAltDashboard param).
+ALT_DASH_STOCK = 0
+ALT_DASH_LEAD = 1
+ALT_DASH_VEHICLE = 2
+
+
 def _alt_dashboard_hud_distance(lead_visible, lead_distance_m):
   # Map lead range to Honda's distance bars so they "close in" as the lead approaches.
   # Cluster mapping: value 0 -> 4 bars (far/none), 1 -> 1 bar, 2 -> 2 bars, 3 -> 3 bars.
@@ -157,14 +163,26 @@ def _alt_dashboard_hud_distance(lead_visible, lead_distance_m):
   return 0         # >= 30 m -> 4 bars
 
 
+def _alt_dashboard_accel_distance(accel):
+  # Whimsical accelerometer on the distance bars: accelerating pushes them out (more
+  # bars), braking pulls them in (fewer). Cluster: value 0 -> 4 bars, 3 -> 3, 2 -> 2, 1 -> 1.
+  if accel >= 0.6:
+    return 0       # strong accel -> 4 bars (pushed out)
+  if accel >= 0.15:
+    return 3       # mild accel -> 3 bars
+  if accel > -0.15:
+    return 2       # steady -> 2 bars
+  return 1         # braking -> 1 bar (pulled in)
+
+
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
-                   alt_dashboard=False, lead_speed_display=0.0):
+                   alt_dashboard_mode=ALT_DASH_STOCK, lead_speed_display=0.0, vehicle_speed_display=0.0, vehicle_accel=0.0):
   cruise_speed = hud_v_cruise
   hud_distance = hud_control.leadDistanceBars % 4  # 1/2/3 bars; econ -> 4 wraps to 0 which the cluster shows as 4 bars
   send_acc_on = True
 
-  if alt_dashboard:
-    # Repurpose the ACC cluster as a live lead display.
+  if alt_dashboard_mode == ALT_DASH_LEAD:
+    # Live lead display: lead speed in place of set speed, bars close in with range.
     send_acc_on = False  # don't light the ACC indicator; we're showing lead info instead
     if not hud_control.leadVisible:
       cruise_speed = 253  # "--": engaged with no lead present
@@ -173,6 +191,11 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
     else:
       cruise_speed = min(251, max(0, int(round(lead_speed_display))))  # lead speed (keep clear of 252/253)
     hud_distance = _alt_dashboard_hud_distance(hud_control.leadVisible, hud_control.leadDistance)
+  elif alt_dashboard_mode == ALT_DASH_VEHICLE:
+    # Vehicle display: own speed in place of set speed, bars track acceleration.
+    send_acc_on = False
+    cruise_speed = min(251, max(0, int(round(vehicle_speed_display))))
+    hud_distance = _alt_dashboard_accel_distance(vehicle_accel)
 
   acc_hud_values = {
     'CRUISE_SPEED': cruise_speed,
