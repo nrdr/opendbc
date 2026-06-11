@@ -47,7 +47,8 @@ class CanBus(CanBusBase):
     return self.offset
 
 
-def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_cancel_cmd, fcw, car_fingerprint, stock_brake, CP_SP):
+def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_cancel_cmd, fcw, car_fingerprint, stock_brake, CP_SP,
+                         clear_dash_faults=True):
   # TODO: do we loose pressure if we keep pump off for long?
   brakelights = apply_brake > 0
   brake_rq = apply_brake > 0
@@ -60,8 +61,10 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
     "COMPUTER_BRAKE_REQUEST": brake_rq,
     "SET_ME_1": 1,
     "BRAKE_LIGHTS": brakelights,
-    "CHIME": 0,  # send the chime for stock fcw
-    "FCW": 0,  # TODO: Why are there two bits for fcw?
+    # Clear Dashboard Fault Codes ON: suppress the stock FCW chime/flag entirely.
+    # OFF: stock openpilot behavior (chime + FCW passthrough on forward collision warning).
+    "CHIME": 0 if clear_dash_faults else (stock_brake["CHIME"] if fcw else 0),  # send the chime for stock fcw
+    "FCW": 0 if clear_dash_faults else (fcw << 1),  # TODO: Why are there two bits for fcw?
     "AEB_REQ_1": 0,
     "AEB_REQ_2": 0,
     "AEB_STATUS": 0,
@@ -186,7 +189,8 @@ def _alt_dashboard_accel_distance(accel):
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
                    speed_design=ALT_SPEED_STOCK, distance_design=ALT_DIST_STOCK,
                    sub_mode_active=False, sub_mode_blink_on=True,
-                   lead_speed_display=0.0, gps_speed_display=0.0, cluster_speed_display=0.0, vehicle_accel=0.0):
+                   lead_speed_display=0.0, gps_speed_display=0.0, cluster_speed_display=0.0, vehicle_accel=0.0,
+                   clear_dash_faults=True):
   if sub_mode_active:
     # Dynamic HUD (Cruise Button Sub-Mode): force the stock layout while active.
     # The bars light up with the CURRENT personality regardless of engagement state,
@@ -259,12 +263,33 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
     acc_hud_values['PCM_SPEED'] = pcm_speed * CV.MS_TO_KPH
     acc_hud_values['PCM_GAS'] = pcm_accel
     acc_hud_values['SET_ME_X01'] = speed_control if (CP.flags & HondaFlags.HYBRID) and (CP.carFingerprint in (CAR.ACURA_MDX_3G_MMR)) else 1
-    acc_hud_values['FCM_OFF'] = 0
-    acc_hud_values['FCM_OFF_2'] = 0
-    acc_hud_values['FCM_PROBLEM'] = 0
-    acc_hud_values['ICONS'] = 0
+    if clear_dash_faults:
+      # Clear Dashboard Fault Codes ON: force the FCM/icon fault bits off (Dashboard
+      # Cluster Behavior Module - lets a car with a dead/absent stock camera run clean).
+      acc_hud_values['FCM_OFF'] = 0
+      acc_hud_values['FCM_OFF_2'] = 0
+      acc_hud_values['FCM_PROBLEM'] = 0
+      acc_hud_values['ICONS'] = 0
+    else:
+      # OFF: stock openpilot behavior - pass the camera's own values through.
+      acc_hud_values['FCM_OFF'] = acc_hud['FCM_OFF']
+      acc_hud_values['FCM_OFF_2'] = acc_hud['FCM_OFF_2']
+      acc_hud_values['FCM_PROBLEM'] = acc_hud['FCM_PROBLEM']
+      acc_hud_values['ICONS'] = acc_hud['ICONS']
 
   return packer.make_can_msg("ACC_HUD", bus, acc_hud_values)
+
+
+def create_camera_messages(packer, bus):
+  # CAMERA_MESSAGES (0x35E) is normally broadcast by the stock camera. With a
+  # dead/absent camera the cluster raises "Auto High Beam System Problem" when this
+  # message times out - there is no fault flag to clear anywhere, the message just
+  # has to keep existing. Spoof it with high beams reported off/inactive.
+  values = {
+    'HIGHBEAMS_ON': 0,
+    'AUTO_HIGHBEAMS_ACTIVE': 0,
+  }
+  return packer.make_can_msg("CAMERA_MESSAGES", bus, values)
 
 
 def create_lkas_hud(packer, bus, CP, hud_control, lat_active, steering_available, reduced_steering, alert_steer_required, lkas_hud, dashed_lanes,

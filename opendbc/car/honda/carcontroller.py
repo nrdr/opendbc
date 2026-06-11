@@ -320,6 +320,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # Alternative Dashboard designs (Party Tricks)
       "alt_dashboard_speed": int(get_param_float(self.param_reader, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),     # 0 Stock, 1 Lead, 2 GPS, 3 Cluster
       "alt_dashboard_distance": int(get_param_float(self.param_reader, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),  # 0 Stock, 1 Radar, 2 Velocity
+      # Special: dashboard fault clearing + dead-camera spoofing
+      "clear_dash_faults": get_param_bool(self.param_reader, "NrdrClearDashFaults", True),
+      "spoof_camera_messages": get_param_bool(self.param_reader, "HondaSpoofCameraMessages", False),
       # Dynamic HUD (Cruise Button Sub-Mode)
       "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrCruiseButtonSubMode", True),
       "sub_mode_until": get_param_float(self.param_reader, "NrdrHudSubModeUntil", 0.0, 0.0),
@@ -577,7 +580,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           pcm_override = True
           can_sends.append(hondacan.create_brake_command(self.packer, self.CAN, apply_brake, pump_on,
                                                          pcm_override, pcm_cancel_cmd, alert_fcw,
-                                                         self.CP.carFingerprint, CS.stock_brake, self.CP_SP))
+                                                         self.CP.carFingerprint, CS.stock_brake, self.CP_SP,
+                                                         clear_dash_faults=live["clear_dash_faults"]))
           self.apply_brake_last = apply_brake
           self.brake = apply_brake / self.params.NIDEC_BRAKE_MAX
 
@@ -616,7 +620,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                  speed_design=live["alt_dashboard_speed"], distance_design=live["alt_dashboard_distance"],
                                                  sub_mode_active=sub_mode_active, sub_mode_blink_on=sub_mode_blink_on,
                                                  lead_speed_display=lead_speed_display, gps_speed_display=gps_speed_display,
-                                                 cluster_speed_display=cluster_speed_display, vehicle_accel=CS.out.aEgo))
+                                                 cluster_speed_display=cluster_speed_display, vehicle_accel=CS.out.aEgo,
+                                                 clear_dash_faults=live["clear_dash_faults"]))
+
+      # Dead-camera support: keep CAMERA_MESSAGES (0x35E) alive so the cluster never
+      # raises "Auto High Beam System Problem". Nidec only; OFF unless the stock
+      # camera is actually dead/absent (a live camera also sends this message).
+      if live["spoof_camera_messages"] and self.CP.carFingerprint not in HONDA_BOSCH:
+        can_sends.append(hondacan.create_camera_messages(self.packer, self.CAN.pt))
 
       steering_available = CS.out.cruiseState.available and CS.out.vEgo > max(self.params.STEER_GLOBAL_MIN_SPEED, self.CP.minSteerSpeed)
       reduced_steering = CS.out.steeringPressed
