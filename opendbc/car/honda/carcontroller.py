@@ -316,33 +316,34 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "steer_delta_up": get_param_float(self.param_reader, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
       "steer_delta_down": get_param_float(self.param_reader, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
       "stopping_decel_rate": get_param_float(self.param_reader, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
-      "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", True),
+      "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", False),
       # Alternative Dashboard designs (Party Tricks)
       "alt_dashboard_speed": int(get_param_float(self.param_reader, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),     # 0 Stock, 1 Lead, 2 GPS, 3 Cluster
       "alt_dashboard_distance": int(get_param_float(self.param_reader, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),  # 0 Stock, 1 Radar, 2 Velocity
       # Dynamic HUD (Cruise Button Sub-Mode)
       "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrCruiseButtonSubMode", True),
       "sub_mode_until": get_param_float(self.param_reader, "NrdrHudSubModeUntil", 0.0, 0.0),
+      # Must stay in range with SUBMODE_WINDOW_MIN/MAX in openpilot selfdrive/controls/lib/nrdr_hud_submode.py
+      "sub_mode_window_s": get_param_float(self.param_reader, "NrdrCruiseButtonSubModeSecs", 15.0, 5.0, 60.0),
     }
-
-  # Must match SUBMODE_WINDOW_S in openpilot selfdrive/controls/lib/nrdr_hud_submode.py
-  SUBMODE_WINDOW_S = 15.0
 
   @staticmethod
   def _hud_sub_mode_state(live):
     """Dynamic HUD sub-mode + blink state from the shared NrdrHudSubModeUntil deadline.
 
-    The blink accelerates continuously as the window runs out: a lazy 1000ms ON /
-    200ms OFF on a fresh press, ramping to a frantic 100/100 (5 Hz) right before
-    the sub-mode cuts off - so you can always tell how much time is left."""
+    The blink accelerates continuously across the whole user-set window: a lazy
+    1000ms ON / 200ms OFF on a fresh press, ramping to a frantic 100/100 (5 Hz)
+    right before the sub-mode cuts off - so you can always tell how much time is
+    left, whether the window is 5 seconds or 60."""
     if not live["sub_mode_enabled"]:
       return False, True
     now = time.monotonic()
     remaining = live["sub_mode_until"] - now
     if remaining <= 0.0:
       return False, True
-    on_ms = float(np.interp(remaining, [0.0, CarController.SUBMODE_WINDOW_S], [100.0, 1000.0]))
-    off_ms = float(np.interp(remaining, [0.0, CarController.SUBMODE_WINDOW_S], [100.0, 200.0]))
+    window_s = live["sub_mode_window_s"]
+    on_ms = float(np.interp(remaining, [0.0, window_s], [100.0, 1000.0]))
+    off_ms = float(np.interp(remaining, [0.0, window_s], [100.0, 200.0]))
     blink_on = (now * 1000.0) % (on_ms + off_ms) < on_ms
     return True, blink_on
 
