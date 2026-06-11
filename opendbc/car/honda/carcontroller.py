@@ -320,30 +320,30 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # Alternative Dashboard designs (Party Tricks)
       "alt_dashboard_speed": int(get_param_float(self.param_reader, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),     # 0 Stock, 1 Lead, 2 GPS, 3 Cluster
       "alt_dashboard_distance": int(get_param_float(self.param_reader, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),  # 0 Stock, 1 Radar, 2 Velocity
-      # Dynamic HUD (Distance Button Sub-Mode)
-      "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrDistanceButtonSubMode", True),
+      # Dynamic HUD (Cruise Button Sub-Mode)
+      "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrCruiseButtonSubMode", True),
       "sub_mode_until": get_param_float(self.param_reader, "NrdrHudSubModeUntil", 0.0, 0.0),
     }
+
+  # Must match SUBMODE_WINDOW_S in openpilot selfdrive/controls/lib/nrdr_hud_submode.py
+  SUBMODE_WINDOW_S = 15.0
 
   @staticmethod
   def _hud_sub_mode_state(live):
     """Dynamic HUD sub-mode + blink state from the shared NrdrHudSubModeUntil deadline.
 
-    Blink cadence: 1000ms ON / 200ms OFF, then 800/200 for the final 10s, then
-    600/200 for the final 5s as the exit warning."""
+    The blink accelerates continuously as the window runs out: a lazy 1000ms ON /
+    200ms OFF on a fresh press, ramping to a frantic 100/100 (5 Hz) right before
+    the sub-mode cuts off - so you can always tell how much time is left."""
     if not live["sub_mode_enabled"]:
       return False, True
     now = time.monotonic()
     remaining = live["sub_mode_until"] - now
     if remaining <= 0.0:
       return False, True
-    if remaining > 10.0:
-      on_ms = 1000
-    elif remaining > 5.0:
-      on_ms = 800
-    else:
-      on_ms = 600
-    blink_on = (int(now * 1000.0) % (on_ms + 200)) < on_ms
+    on_ms = float(np.interp(remaining, [0.0, CarController.SUBMODE_WINDOW_S], [100.0, 1000.0]))
+    off_ms = float(np.interp(remaining, [0.0, CarController.SUBMODE_WINDOW_S], [100.0, 200.0]))
+    blink_on = (now * 1000.0) % (on_ms + off_ms) < on_ms
     return True, blink_on
 
   def _update_steering_torque(self, CC, CS, live):

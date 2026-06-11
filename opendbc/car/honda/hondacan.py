@@ -188,7 +188,7 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
                    sub_mode_active=False, sub_mode_blink_on=True,
                    lead_speed_display=0.0, gps_speed_display=0.0, cluster_speed_display=0.0, vehicle_accel=0.0):
   if sub_mode_active:
-    # Dynamic HUD (Distance Button Sub-Mode): force the stock layout while active.
+    # Dynamic HUD (Cruise Button Sub-Mode): force the stock layout while active.
     # The bars light up with the CURRENT personality regardless of engagement state,
     # the set speed shows if cruise is engaged, and everything except the lane lines
     # blinks at the sub-mode's warning rate (handled via sub_mode_blink_on).
@@ -200,7 +200,7 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
   mini_car = 1 if enabled else 0
   hud_lead = 2 if enabled and hud_control.leadVisible else 1 if enabled else 0
   # The distance bars only draw with ACC_ON: send it only on the Stock distance
-  # design (stock engaged behavior) or during the Distance Button Sub-Mode below.
+  # design (stock engaged behavior) or during the Cruise Button Sub-Mode below.
   send_acc_on = distance_design == ALT_DIST_STOCK
   acc_on = int(enabled)
 
