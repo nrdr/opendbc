@@ -1,5 +1,6 @@
 import math
 import threading
+import time
 from queue import Empty, Queue
 
 import numpy as np
@@ -316,8 +317,34 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "steer_delta_down": get_param_float(self.param_reader, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
       "stopping_decel_rate": get_param_float(self.param_reader, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
       "increase_override_tolerance": get_param_bool(self.param_reader, "NrdrIncreaseOverrideTolerance", True),
-      "alt_dashboard": int(get_param_float(self.param_reader, "HondaAltDashboard", 0.0, 0.0, 2.0)),  # 0 Stock, 1 Lead, 2 Vehicle
+      # Alternative Dashboard designs (Party Tricks)
+      "alt_dashboard_speed": int(get_param_float(self.param_reader, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),     # 0 Stock, 1 Lead, 2 GPS, 3 Cluster
+      "alt_dashboard_distance": int(get_param_float(self.param_reader, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),  # 0 Stock, 1 Radar, 2 Velocity
+      # Dynamic HUD (Distance Button Sub-Mode)
+      "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrDistanceButtonSubMode", True),
+      "sub_mode_until": get_param_float(self.param_reader, "NrdrHudSubModeUntil", 0.0, 0.0),
     }
+
+  @staticmethod
+  def _hud_sub_mode_state(live):
+    """Dynamic HUD sub-mode + blink state from the shared NrdrHudSubModeUntil deadline.
+
+    Blink cadence: 1000ms ON / 200ms OFF, then 800/200 for the final 10s, then
+    600/200 for the final 5s as the exit warning."""
+    if not live["sub_mode_enabled"]:
+      return False, True
+    now = time.monotonic()
+    remaining = live["sub_mode_until"] - now
+    if remaining <= 0.0:
+      return False, True
+    if remaining > 10.0:
+      on_ms = 1000
+    elif remaining > 5.0:
+      on_ms = 800
+    else:
+      on_ms = 600
+    blink_on = (int(now * 1000.0) % (on_ms + 200)) < on_ms
+    return True, blink_on
 
   def _update_steering_torque(self, CC, CS, live):
     torque_cmd = float(CC.actuators.torque) if CC.latActive else 0.0
@@ -580,11 +607,15 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # (v_cruise_factor matches the hud_v_cruise conversion above).
         v_factor = CS.v_cruise_factor if CS.v_cruise_factor else 1.0
         lead_speed_display = hud_control.leadVLead / v_factor
-        vehicle_speed_display = CS.out.vEgo / v_factor
+        gps_speed_display = CS.out.vEgo / v_factor
+        cluster_speed_display = (CS.out.vEgoCluster or CS.out.vEgo) / v_factor
+        sub_mode_active, sub_mode_blink_on = self._hud_sub_mode_state(live)
         can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, pcm_accel,
                                                  hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
-                                                 alt_dashboard_mode=live["alt_dashboard"], lead_speed_display=lead_speed_display,
-                                                 vehicle_speed_display=vehicle_speed_display, vehicle_accel=CS.out.aEgo))
+                                                 speed_design=live["alt_dashboard_speed"], distance_design=live["alt_dashboard_distance"],
+                                                 sub_mode_active=sub_mode_active, sub_mode_blink_on=sub_mode_blink_on,
+                                                 lead_speed_display=lead_speed_display, gps_speed_display=gps_speed_display,
+                                                 cluster_speed_display=cluster_speed_display, vehicle_accel=CS.out.aEgo))
 
       steering_available = CS.out.cruiseState.available and CS.out.vEgo > max(self.params.STEER_GLOBAL_MIN_SPEED, self.CP.minSteerSpeed)
       reduced_steering = CS.out.steeringPressed

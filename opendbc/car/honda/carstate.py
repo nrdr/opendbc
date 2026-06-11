@@ -178,12 +178,27 @@ class CarState(CarStateBase, CarStateExt):
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
 
     ret.steeringTorque = cp.vl["STEER_STATUS"]["STEER_TORQUE_SENSOR"]
-    steer_threshold = STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
+    # STEER_THRESHOLD is the steeringPressed (driver override) detection point: the
+    # raw torque-sensor reading above which the driver is considered to be steering.
+    # Most Hondas use 1200; cars with different torque-sensor scales have overrides.
+    stock_threshold = STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
+    steer_threshold = stock_threshold
+    # Driver Override Threshold: user-tunable, 1200 = stock. On cars whose stock
+    # threshold is not 1200, the user value is applied proportionally so 1200 still
+    # means "stock" everywhere (e.g. slider 1800 on an ACURA_RDX -> 400 * 1.5 = 600).
+    try:
+      custom = self.params.get("NrdrDriverOverrideThreshold")
+      if custom is not None and int(custom) > 0:
+        steer_threshold = int(custom) if stock_threshold == 1200 else stock_threshold * int(custom) / 1200.0
+    except (TypeError, ValueError):
+      pass
     if self.params.get_bool("NrdrIncreaseOverrideTolerance") and self.CP.carFingerprint in (
       CAR.HONDA_CLARITY,
       CAR.HONDA_CIVIC,
       CAR.HONDA_CIVIC_BOSCH,
     ):
+      # Hysteresis headroom: doubles the (possibly user-set) threshold on platforms
+      # with sensitive EPS torque sensors to avoid false override detections.
       steer_threshold *= 2
     ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
 

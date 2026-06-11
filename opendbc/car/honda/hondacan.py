@@ -143,10 +143,18 @@ def create_bosch_supplemental_1(packer, CAN):
   return packer.make_can_msg("BOSCH_SUPPLEMENTAL_1", CAN.lkas, values)
 
 
-# Alternative Dashboard modes (HondaAltDashboard param).
-ALT_DASH_STOCK = 0
-ALT_DASH_LEAD = 1
-ALT_DASH_VEHICLE = 2
+# Alternative Dashboard Speed Design (HondaAltDashboardSpeed param):
+# what is shown in the cluster's set-speed slot.
+ALT_SPEED_STOCK = 0
+ALT_SPEED_LEAD = 1     # lead speed (mph, whole numbers); "Stopped" below 1 mph, "--" with no lead
+ALT_SPEED_GPS = 2      # comma's own true speed (vEgo)
+ALT_SPEED_CLUSTER = 3  # exactly what the dash cluster reads (vEgoCluster)
+
+# Alternative Dashboard Distance Design (HondaAltDashboardDistance param):
+# what drives the distance bars / mini car.
+ALT_DIST_STOCK = 0
+ALT_DIST_RADAR = 1     # bars close in as the lead approaches
+ALT_DIST_VELOCITY = 2  # bars push out under acceleration, pull in under braking
 
 
 def _alt_dashboard_hud_distance(lead_visible, lead_distance_m):
@@ -176,30 +184,59 @@ def _alt_dashboard_accel_distance(accel):
 
 
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
-                   alt_dashboard_mode=ALT_DASH_STOCK, lead_speed_display=0.0, vehicle_speed_display=0.0, vehicle_accel=0.0):
+                   speed_design=ALT_SPEED_STOCK, distance_design=ALT_DIST_STOCK,
+                   sub_mode_active=False, sub_mode_blink_on=True,
+                   lead_speed_display=0.0, gps_speed_display=0.0, cluster_speed_display=0.0, vehicle_accel=0.0):
+  if sub_mode_active:
+    # Dynamic HUD (Distance Button Sub-Mode): force the stock layout while active.
+    # The bars light up with the CURRENT personality regardless of engagement state,
+    # the set speed shows if cruise is engaged, and everything except the lane lines
+    # blinks at the sub-mode's warning rate (handled via sub_mode_blink_on).
+    speed_design = ALT_SPEED_STOCK
+    distance_design = ALT_DIST_STOCK
+
   cruise_speed = hud_v_cruise
   hud_distance = hud_control.leadDistanceBars % 4  # 1/2/3 bars; econ -> 4 wraps to 0 which the cluster shows as 4 bars
-  send_acc_on = True
+  mini_car = 1 if enabled else 0
+  # The distance bars only draw with ACC_ON: send it only on the Stock distance
+  # design (stock engaged behavior) or during the Distance Button Sub-Mode below.
+  send_acc_on = distance_design == ALT_DIST_STOCK
+  acc_on = int(enabled)
 
-  if alt_dashboard_mode == ALT_DASH_LEAD:
-    # Live lead display: lead speed in place of set speed, bars close in with range.
-    send_acc_on = False  # don't light the ACC indicator; we're showing lead info instead
+  if speed_design == ALT_SPEED_LEAD:
+    # Lead speed in place of set speed. mph values are always whole numbers.
     if not hud_control.leadVisible:
-      cruise_speed = 253  # "--": engaged with no lead present
+      cruise_speed = 253  # "--": no lead present
     elif hud_control.leadVLead < CV.MPH_TO_MS:  # lead below 1 mph
       cruise_speed = 252  # "Stopped"
     else:
-      cruise_speed = min(251, max(0, int(round(lead_speed_display))))  # lead speed (keep clear of 252/253)
+      cruise_speed = min(251, max(0, int(round(lead_speed_display))))  # keep clear of 252/253
+  elif speed_design == ALT_SPEED_GPS:
+    cruise_speed = min(251, max(0, int(round(gps_speed_display))))
+  elif speed_design == ALT_SPEED_CLUSTER:
+    cruise_speed = min(251, max(0, int(round(cluster_speed_display))))
+
+  if distance_design == ALT_DIST_RADAR:
     hud_distance = _alt_dashboard_hud_distance(hud_control.leadVisible, hud_control.leadDistance)
-  elif alt_dashboard_mode == ALT_DASH_VEHICLE:
-    # Vehicle display: own speed in place of set speed, bars track acceleration.
-    send_acc_on = False
-    cruise_speed = min(251, max(0, int(round(vehicle_speed_display))))
+  elif distance_design == ALT_DIST_VELOCITY:
     hud_distance = _alt_dashboard_accel_distance(vehicle_accel)
+
+  # Alt designs stay on the cluster permanently, not just while engaged, so the
+  # mini car has to be lit permanently too (it is what renders HUD_DISTANCE moves).
+  if speed_design != ALT_SPEED_STOCK or distance_design != ALT_DIST_STOCK:
+    mini_car = 1
+
+  if sub_mode_active:
+    # Bars show the current personality no matter the engagement state, blinking.
+    send_acc_on = True
+    acc_on = 1 if sub_mode_blink_on else 0
+    mini_car = 1 if sub_mode_blink_on else (1 if enabled else 0)
+    if not (enabled and sub_mode_blink_on):
+      cruise_speed = 255  # blank: set speed only shows while engaged, and blinks too
 
   acc_hud_values = {
     'CRUISE_SPEED': cruise_speed,
-    'ENABLE_MINI_CAR': 1 if enabled else 0,
+    'ENABLE_MINI_CAR': mini_car,
     # only moves the lead car without ACC_ON
     'HUD_DISTANCE': hud_distance,
     'IMPERIAL_UNIT': int(not is_metric),
@@ -209,13 +246,13 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
 
   if CP.carFingerprint in HONDA_BOSCH:
     if send_acc_on:
-      acc_hud_values['ACC_ON'] = int(enabled)
+      acc_hud_values['ACC_ON'] = acc_on
     acc_hud_values['FCM_OFF'] = 1
     acc_hud_values['FCM_OFF_2'] = 1
   else:
     # Shows the distance bars, TODO: stock camera shows updates temporarily while disabled
     if send_acc_on:
-      acc_hud_values['ACC_ON'] = int(enabled)
+      acc_hud_values['ACC_ON'] = acc_on
     acc_hud_values['PCM_SPEED'] = pcm_speed * CV.MS_TO_KPH
     acc_hud_values['PCM_GAS'] = pcm_accel
     acc_hud_values['SET_ME_X01'] = speed_control if (CP.flags & HondaFlags.HYBRID) and (CP.carFingerprint in (CAR.ACURA_MDX_3G_MMR)) else 1
