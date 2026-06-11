@@ -198,6 +198,7 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
   cruise_speed = hud_v_cruise
   hud_distance = hud_control.leadDistanceBars % 4  # 1/2/3 bars; econ -> 4 wraps to 0 which the cluster shows as 4 bars
   mini_car = 1 if enabled else 0
+  hud_lead = 2 if enabled and hud_control.leadVisible else 1 if enabled else 0
   # The distance bars only draw with ACC_ON: send it only on the Stock distance
   # design (stock engaged behavior) or during the Distance Button Sub-Mode below.
   send_acc_on = distance_design == ALT_DIST_STOCK
@@ -221,10 +222,12 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
   elif distance_design == ALT_DIST_VELOCITY:
     hud_distance = _alt_dashboard_accel_distance(vehicle_accel)
 
-  # Alt designs stay on the cluster permanently, not just while engaged, so the
-  # mini car has to be lit permanently too (it is what renders HUD_DISTANCE moves).
+  # Alt designs stay on the cluster permanently, not just while engaged: the mini
+  # car must be lit permanently (it renders HUD_DISTANCE moves) and the lead car
+  # icon (HUD_LEAD) must track lead presence regardless of engagement state.
   if speed_design != ALT_SPEED_STOCK or distance_design != ALT_DIST_STOCK:
     mini_car = 1
+    hud_lead = 2 if hud_control.leadVisible else 1
 
   if sub_mode_active:
     # Bars show the current personality no matter the engagement state, blinking.
@@ -240,7 +243,7 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
     # only moves the lead car without ACC_ON
     'HUD_DISTANCE': hud_distance,
     'IMPERIAL_UNIT': int(not is_metric),
-    'HUD_LEAD': 2 if enabled and hud_control.leadVisible else 1 if enabled else 0,
+    'HUD_LEAD': hud_lead,
     'SET_ME_X01_2': 1,
   }
 
