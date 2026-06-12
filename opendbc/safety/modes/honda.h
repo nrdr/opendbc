@@ -27,6 +27,7 @@
   {0x1FA, 0, 8, .check_relay = false},  \
   {0x30C, 0, 8, .check_relay = true},   \
   {0x33D, 0, 5, .check_relay = true},   \
+  {0x35E, 0, 8, .check_relay = false},  \
 
 enum {
   HONDA_BTN_NONE = 0,
