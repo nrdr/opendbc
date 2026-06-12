@@ -47,7 +47,8 @@ class CanBus(CanBusBase):
     return self.offset
 
 
-def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_cancel_cmd, fcw, car_fingerprint, stock_brake, CP_SP):
+def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_cancel_cmd, fcw, car_fingerprint, stock_brake, CP_SP,
+                         clear_dash_faults=True):
   # TODO: do we loose pressure if we keep pump off for long?
   brakelights = apply_brake > 0
   brake_rq = apply_brake > 0
@@ -60,8 +61,10 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
     "COMPUTER_BRAKE_REQUEST": brake_rq,
     "SET_ME_1": 1,
     "BRAKE_LIGHTS": brakelights,
-    "CHIME": stock_brake["CHIME"] if fcw else 0,  # send the chime for stock fcw
-    "FCW": fcw << 1,  # TODO: Why are there two bits for fcw?
+    # Clear Dashboard Fault Codes ON: suppress the stock FCW chime/flag entirely.
+    # OFF: stock openpilot behavior (chime + FCW passthrough on forward collision warning).
+    "CHIME": 0 if clear_dash_faults else (stock_brake["CHIME"] if fcw else 0),  # send the chime for stock fcw
+    "FCW": 0 if clear_dash_faults else (fcw << 1),  # TODO: Why are there two bits for fcw?
     "AEB_REQ_1": 0,
     "AEB_REQ_2": 0,
     "AEB_STATUS": 0,
@@ -143,33 +146,150 @@ def create_bosch_supplemental_1(packer, CAN):
   return packer.make_can_msg("BOSCH_SUPPLEMENTAL_1", CAN.lkas, values)
 
 
-def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control):
+# Alternative Dashboard Speed Design (HondaAltDashboardSpeed param):
+# what is shown in the cluster's set-speed slot.
+ALT_SPEED_STOCK = 0
+ALT_SPEED_LEAD = 1     # lead speed (mph, whole numbers); "Stopped" below 1 mph, "--" with no lead
+ALT_SPEED_GPS = 2      # comma's own true speed (vEgo)
+ALT_SPEED_CLUSTER = 3  # exactly what the dash cluster reads (vEgoCluster)
+
+# Alternative Dashboard Distance Design (HondaAltDashboardDistance param):
+# what drives the distance bars / mini car.
+ALT_DIST_STOCK = 0
+ALT_DIST_RADAR = 1     # bars close in as the lead approaches
+ALT_DIST_VELOCITY = 2  # bars push out under acceleration, pull in under braking
+
+
+def _alt_dashboard_hud_distance(lead_visible, lead_distance_m):
+  # Map lead range to Honda's distance bars so they "close in" as the lead approaches.
+  # Cluster mapping: value 0 -> 4 bars (far/none), 1 -> 1 bar, 2 -> 2 bars, 3 -> 3 bars.
+  if not lead_visible or lead_distance_m <= 0.0:
+    return 0       # no / far lead -> 4 bars
+  if lead_distance_m < 10.0:
+    return 1       # very close -> 1 bar
+  if lead_distance_m < 20.0:
+    return 2       # 2 bars
+  if lead_distance_m < 30.0:
+    return 3       # 3 bars
+  return 0         # >= 30 m -> 4 bars
+
+
+def _alt_dashboard_accel_distance(accel):
+  # Whimsical accelerometer on the distance bars: accelerating pushes them out (more
+  # bars), braking pulls them in (fewer). Cluster: value 0 -> 4 bars, 3 -> 3, 2 -> 2, 1 -> 1.
+  if accel >= 0.6:
+    return 0       # strong accel -> 4 bars (pushed out)
+  if accel >= 0.15:
+    return 3       # mild accel -> 3 bars
+  if accel > -0.15:
+    return 2       # steady -> 2 bars
+  return 1         # braking -> 1 bar (pulled in)
+
+
+def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
+                   speed_design=ALT_SPEED_STOCK, distance_design=ALT_DIST_STOCK,
+                   sub_mode_active=False, sub_mode_blink_on=True,
+                   lead_speed_display=0.0, gps_speed_display=0.0, cluster_speed_display=0.0, vehicle_accel=0.0,
+                   clear_dash_faults=True):
+  if sub_mode_active:
+    # Dynamic HUD (Cruise Button Sub-Mode): force the stock layout while active.
+    # The bars light up with the CURRENT personality regardless of engagement state,
+    # the set speed shows if cruise is engaged, and everything except the lane lines
+    # blinks at the sub-mode's warning rate (handled via sub_mode_blink_on).
+    speed_design = ALT_SPEED_STOCK
+    distance_design = ALT_DIST_STOCK
+
+  cruise_speed = hud_v_cruise
+  hud_distance = hud_control.leadDistanceBars % 4  # 1/2/3 bars; econ -> 4 wraps to 0 which the cluster shows as 4 bars
+  mini_car = 1 if enabled else 0
+  hud_lead = 2 if enabled and hud_control.leadVisible else 1 if enabled else 0
+  # The distance bars only draw with ACC_ON: send it only on the Stock distance
+  # design (stock engaged behavior) or during the Cruise Button Sub-Mode below.
+  send_acc_on = distance_design == ALT_DIST_STOCK
+  acc_on = int(enabled)
+
+  if speed_design == ALT_SPEED_LEAD:
+    # Lead speed in place of set speed. mph values are always whole numbers.
+    if not hud_control.leadVisible:
+      cruise_speed = 253  # "--": no lead present
+    elif hud_control.leadVLead < CV.MPH_TO_MS:  # lead below 1 mph
+      cruise_speed = 252  # "Stopped"
+    else:
+      cruise_speed = min(251, max(0, int(round(lead_speed_display))))  # keep clear of 252/253
+  elif speed_design == ALT_SPEED_GPS:
+    cruise_speed = min(251, max(0, int(round(gps_speed_display))))
+  elif speed_design == ALT_SPEED_CLUSTER:
+    cruise_speed = min(251, max(0, int(round(cluster_speed_display))))
+
+  if distance_design == ALT_DIST_RADAR:
+    hud_distance = _alt_dashboard_hud_distance(hud_control.leadVisible, hud_control.leadDistance)
+  elif distance_design == ALT_DIST_VELOCITY:
+    hud_distance = _alt_dashboard_accel_distance(vehicle_accel)
+
+  # Alt designs stay on the cluster permanently, not just while engaged: the mini
+  # car must be lit permanently (it renders HUD_DISTANCE moves) and the lead car
+  # icon (HUD_LEAD) must track lead presence regardless of engagement state.
+  if speed_design != ALT_SPEED_STOCK or distance_design != ALT_DIST_STOCK:
+    mini_car = 1
+    hud_lead = 2 if hud_control.leadVisible else 1
+
+  if sub_mode_active:
+    # Bars show the current personality no matter the engagement state, blinking.
+    send_acc_on = True
+    acc_on = 1 if sub_mode_blink_on else 0
+    mini_car = 1 if sub_mode_blink_on else (1 if enabled else 0)
+    if not (enabled and sub_mode_blink_on):
+      cruise_speed = 255  # blank: set speed only shows while engaged, and blinks too
+
   acc_hud_values = {
-    'CRUISE_SPEED': hud_v_cruise,
-    'ENABLE_MINI_CAR': 1 if enabled else 0,
+    'CRUISE_SPEED': cruise_speed,
+    'ENABLE_MINI_CAR': mini_car,
     # only moves the lead car without ACC_ON
-    'HUD_DISTANCE': hud_control.leadDistanceBars,  # wraps to 0 at 4 bars
+    'HUD_DISTANCE': hud_distance,
     'IMPERIAL_UNIT': int(not is_metric),
-    'HUD_LEAD': 2 if enabled and hud_control.leadVisible else 1 if enabled else 0,
+    'HUD_LEAD': hud_lead,
     'SET_ME_X01_2': 1,
   }
 
   if CP.carFingerprint in HONDA_BOSCH:
-    acc_hud_values['ACC_ON'] = int(enabled)
+    if send_acc_on:
+      acc_hud_values['ACC_ON'] = acc_on
     acc_hud_values['FCM_OFF'] = 1
     acc_hud_values['FCM_OFF_2'] = 1
   else:
     # Shows the distance bars, TODO: stock camera shows updates temporarily while disabled
-    acc_hud_values['ACC_ON'] = int(enabled)
+    if send_acc_on:
+      acc_hud_values['ACC_ON'] = acc_on
     acc_hud_values['PCM_SPEED'] = pcm_speed * CV.MS_TO_KPH
     acc_hud_values['PCM_GAS'] = pcm_accel
     acc_hud_values['SET_ME_X01'] = speed_control if (CP.flags & HondaFlags.HYBRID) and (CP.carFingerprint in (CAR.ACURA_MDX_3G_MMR)) else 1
-    acc_hud_values['FCM_OFF'] = acc_hud['FCM_OFF']
-    acc_hud_values['FCM_OFF_2'] = acc_hud['FCM_OFF_2']
-    acc_hud_values['FCM_PROBLEM'] = acc_hud['FCM_PROBLEM']
-    acc_hud_values['ICONS'] = acc_hud['ICONS']
+    if clear_dash_faults:
+      # Clear Dashboard Fault Codes ON: force the FCM/icon fault bits off (Dashboard
+      # Cluster Behavior Module - lets a car with a dead/absent stock camera run clean).
+      acc_hud_values['FCM_OFF'] = 0
+      acc_hud_values['FCM_OFF_2'] = 0
+      acc_hud_values['FCM_PROBLEM'] = 0
+      acc_hud_values['ICONS'] = 0
+    else:
+      # OFF: stock openpilot behavior - pass the camera's own values through.
+      acc_hud_values['FCM_OFF'] = acc_hud['FCM_OFF']
+      acc_hud_values['FCM_OFF_2'] = acc_hud['FCM_OFF_2']
+      acc_hud_values['FCM_PROBLEM'] = acc_hud['FCM_PROBLEM']
+      acc_hud_values['ICONS'] = acc_hud['ICONS']
 
   return packer.make_can_msg("ACC_HUD", bus, acc_hud_values)
+
+
+def create_camera_messages(packer, bus):
+  # CAMERA_MESSAGES (0x35E) is normally broadcast by the stock camera. With a
+  # dead/absent camera the cluster raises "Auto High Beam System Problem" when this
+  # message times out - there is no fault flag to clear anywhere, the message just
+  # has to keep existing. Spoof it with high beams reported off/inactive.
+  values = {
+    'HIGHBEAMS_ON': 0,
+    'AUTO_HIGHBEAMS_ACTIVE': 0,
+  }
+  return packer.make_can_msg("CAMERA_MESSAGES", bus, values)
 
 
 def create_lkas_hud(packer, bus, CP, hud_control, lat_active, steering_available, reduced_steering, alert_steer_required, lkas_hud, dashed_lanes,
