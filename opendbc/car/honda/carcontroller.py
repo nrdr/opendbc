@@ -320,6 +320,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # Alternative Dashboard designs (Party Tricks)
       "alt_dashboard_speed": int(get_param_float(self.param_reader, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),     # 0 Stock, 1 Lead, 2 GPS, 3 Cluster
       "alt_dashboard_distance": int(get_param_float(self.param_reader, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),  # 0 Stock, 1 Radar, 2 Velocity
+      # Lateral Tuning: user minimum steer speed (stored in mph, used in m/s; 0 = stock)
+      "min_steer_speed": get_param_float(self.param_reader, "NrdrMinSteerSpeed", 0.0, 0.0, 45.0) * CV.MPH_TO_MS,
       # Special: dashboard fault clearing + dead-camera spoofing
       "clear_dash_faults": get_param_bool(self.param_reader, "NrdrClearDashFaults", True),
       "spoof_camera_messages": get_param_bool(self.param_reader, "HondaSpoofCameraMessages", False),
@@ -353,6 +355,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
   def _update_steering_torque(self, CC, CS, live):
     torque_cmd = float(CC.actuators.torque) if CC.latActive else 0.0
     steering_pressed = False
+
+    # User Minimum Steer Speed: below this, command no steering torque at all.
+    # Default 0 mph = stock (vEgo is never negative, so the gate can't fire).
+    below_min_steer_speed = CS.out.vEgo < live["min_steer_speed"]
+    if below_min_steer_speed:
+      torque_cmd = 0.0
 
     if CC.latActive:
       if live["increase_override_tolerance"]:
@@ -409,7 +417,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
     # "Driver assist during override" ON  -> openpilot gives way while you steer (LKAS torque drops out).
     # OFF -> openpilot keeps applying torque during override (more resistant).
-    lkas_active = CC.latActive and (not live["driver_assist_during_override"] or not steering_pressed)
+    lkas_active = CC.latActive and (not live["driver_assist_during_override"] or not steering_pressed) and not below_min_steer_speed
     return limited_torque, lkas_active
 
   def update(self, CC, CC_SP, CS, now_nanos):
