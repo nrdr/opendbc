@@ -264,6 +264,10 @@ class LongGasLearner:
 
     self.car_fingerprint = car_fingerprint
 
+    # MVL telemetry: latest lag-aligned gas error (carcontroller mirrors this into
+    # actuators.speed via temp_errorlogging, matching mvl-boston's debug channel).
+    self.last_gas_error = 0.0
+
     # Deque of accel commands (length = _LAG_TICKS + 1 for rate check)
     self._accel_deque: deque = deque(maxlen=_LAG_TICKS + 1)
 
@@ -354,6 +358,7 @@ class LongGasLearner:
 
       if condition_ok:
         gas_error = lagged_accel - a_ego
+        self.last_gas_error = float(gas_error)
 
         # --- gasfactor update (gas_pedal_force > 0 gate) ---
         if gas_error != 0.0 and gas_pedal_force > 0.0:
@@ -1097,6 +1102,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               brake_addon=float(brake_addon),
               at_accel_max=(gas_pedal_force >= self.params.BOSCH_ACCEL_MAX),
             )
+            # MVL telemetry channel: lag-aligned gas error out through actuators.speed.
+            self.temp_errorlogging = self._learner.last_gas_error
           self.gas = float(np.interp(gas_pedal_force * self._learner.gasfactor, self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
 
           # limit gas ramp to 60 units per frame, matches stock. Higher sometimes causes powertrain to ignore gas command.
