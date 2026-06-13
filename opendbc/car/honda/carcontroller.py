@@ -364,12 +364,12 @@ class LongGasLearner:
 
         # --- gasfactor update (gas_pedal_force > 0 gate) ---
         if gas_error != 0.0 and gas_pedal_force > 0.0:
-          if self.car_fingerprint == "HONDA_INSIGHT":
-            learn_speed = 150
-          elif self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR"):
-            learn_speed = 300
+          if self.car_fingerprint in ("HONDA_INSIGHT", "HONDA_CIVIC_BOSCH"):  # gas pedal reacts too slowly
+            learn_speed = 150.0
+          elif self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR"):  # Prevent overreacting to turbo lag
+            learn_speed = 300.0
           else:
-            learn_speed = 50
+            learn_speed = 50.0
           self.raw_gasfactor = np.clip(
             self.raw_gasfactor + gas_error / learn_speed * gas_pedal_force,
             _HARD_LO, _HARD_HI
@@ -377,10 +377,10 @@ class LongGasLearner:
 
         # --- windfactor update ---
         if gas_error != 0.0 and v_ego > 0.0:
-          if self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR"):
-            wind_learn_speed = 100
+          if self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR"):  # Faster reaction
+            wind_learn_speed = 100.0
           else:
-            wind_learn_speed = 1000
+            wind_learn_speed = 1000.0
           wind_adjust = 1.0 + wind_brake_ms2 / wind_learn_speed
           self.raw_windfactor = np.clip(
             self.raw_windfactor * (wind_adjust if gas_error > 0.0 else 1.0 / wind_adjust),
