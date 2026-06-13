@@ -266,6 +266,10 @@ class LongGasLearner:
 
     self.car_fingerprint = car_fingerprint
 
+    # MVL telemetry: latest lag-aligned gas error (carcontroller mirrors this into
+    # actuators.speed via temp_errorlogging, matching mvl-boston's debug channel).
+    self.last_gas_error = 0.0
+
     # Deque of accel commands (length = _LAG_TICKS + 1 for rate check)
     self._accel_deque: deque = deque(maxlen=_LAG_TICKS + 1)
 
@@ -356,6 +360,7 @@ class LongGasLearner:
 
       if condition_ok:
         gas_error = lagged_accel - a_ego
+        self.last_gas_error = float(gas_error)
 
         # --- gasfactor update (gas_pedal_force > 0 gate) ---
         if gas_error != 0.0 and gas_pedal_force > 0.0:
