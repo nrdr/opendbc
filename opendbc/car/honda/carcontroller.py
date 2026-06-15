@@ -859,10 +859,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
   def _hud_sub_mode_state(live):
     """Dynamic HUD sub-mode + blink state from the shared NrdrHudSubModeUntil deadline.
 
-    The blink accelerates continuously across the whole user-set window: a lazy
-    1000ms ON / 200ms OFF on a fresh press, ramping to a frantic 100/100 (5 Hz)
-    right before the sub-mode cuts off - so you can always tell how much time is
-    left, whether the window is 5 seconds or 60."""
+    The blink accelerates across the whole user-set window: a lazy ~1000ms phase on
+    a fresh press, ramping down to a 500ms floor right before the sub-mode cuts off,
+    so you can always tell how much time is left whether the window is 5s or 60s. The
+    ACC HUD carrying this blink is only sent at 10 Hz (frame % 10), so phases are kept
+    >= 500ms and quantized to the 100ms send grid - a faster toggle aliases against the
+    send rate and draws inconsistently to the cluster."""
     if not live["sub_mode_enabled"]:
       return False, True
     now = time.monotonic()
@@ -870,9 +872,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if remaining <= 0.0:
       return False, True
     window_s = live["sub_mode_window_s"]
-    on_ms = float(np.interp(remaining, [0.0, window_s], [100.0, 1000.0]))
-    off_ms = float(np.interp(remaining, [0.0, window_s], [100.0, 200.0]))
-    blink_on = (now * 1000.0) % (on_ms + off_ms) < on_ms
+    # The ACC HUD carrying this blink is only sent at 10 Hz (frame % 10 below), so each
+    # on/off phase must span several sends or it aliases. Ramp the phase from a lazy
+    # 1000ms (fresh press) down to a 500ms floor (about to time out), quantized to the
+    # 100ms send grid so every phase is a whole number of HUD frames.
+    HUD_SEND_MS = 100.0
+    phase_ms = float(np.interp(remaining, [0.0, window_s], [500.0, 1000.0]))
+    phase_ms = max(HUD_SEND_MS, round(phase_ms / HUD_SEND_MS) * HUD_SEND_MS)
+    blink_on = (now * 1000.0) % (2.0 * phase_ms) < phase_ms
     return True, blink_on
 
   def _update_steering_torque(self, CC, CS, live):
