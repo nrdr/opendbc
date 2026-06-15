@@ -798,6 +798,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.steering_pressed_filter_s = 0.0
     self.steering_pressed_robust_prev = False
 
+    # ECU-matched longitudinal (Honda Nidec; opt-in via NrdrHondaEcuMatchedLong, default OFF)
+    self.last_accel_cmd = 0.0
+    self.last_accel_sign = 0
+    self.sign_change_counter = 0
+
     # Bosch extra-brake controller
     self.brake_pid = PIDController(k_p=0.0,
                                    k_i=1.0,
@@ -867,6 +872,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "sub_mode_until": get_param_float(self.param_reader, "NrdrHudSubModeUntil", 0.0, 0.0),
       # Must stay in range with SUBMODE_WINDOW_MIN/MAX in openpilot selfdrive/controls/lib/nrdr_hud_submode.py
       "sub_mode_window_s": get_param_float(self.param_reader, "NrdrCruiseButtonSubModeSecs", 15.0, 5.0, 60.0),
+      # ECU-matched longitudinal improvements (Honda Nidec; default OFF)
+      "ecu_matched_long": get_param_bool(self.param_reader, "NrdrHondaEcuMatchedLong", False),
     }
 
   @staticmethod
@@ -982,10 +989,33 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       accel = actuators.accel
       if (self.CP.carFingerprint in (CAR.ACURA_MDX_3G, CAR.ACURA_MDX_3G_MMR)) and (accel > max(0, CS.out.aEgo) + 0.1):
         accel = 10000.0 # help with lagged accel until pedal tuning is inserted
-      gas, brake = compute_gas_brake(actuators.accel + hill_brake, CS.out.vEgo, self.CP.carFingerprint)
+      # ECU-matched longitudinal (Honda Nidec, opt-in). Shape the gas/brake command to the factory
+      # ECU: rate-limit to its ramp rates, coast in a speed-dependent deadband, hold off briefly on
+      # gas<->brake sign changes. No-op (stock path) when the toggle is OFF.
+      ecu_matched = live["ecu_matched_long"] and self.CP.carFingerprint not in HONDA_BOSCH
+      accel_cmd = actuators.accel
+      if ecu_matched:
+        accel_cmd = float(np.clip(accel_cmd, self.last_accel_cmd - 0.06, self.last_accel_cmd + 0.05))  # ~5 up / 6 m/s^3 down
+      self.last_accel_cmd = accel_cmd
+      gas, brake = compute_gas_brake(accel_cmd + hill_brake, CS.out.vEgo, self.CP.carFingerprint)
+      if ecu_matched:
+        coast_db = float(np.interp(CS.out.vEgo, [2.5, 10.0, 20.0, 30.0], [0.08, 0.06, 0.03, 0.005]))
+        if gas < coast_db and brake < coast_db:
+          gas, brake = 0.0, 0.0
+        accel_sign = 1 if accel_cmd > 0.05 else (-1 if accel_cmd < -0.05 else 0)
+        if accel_sign != 0 and accel_sign != self.last_accel_sign and self.last_accel_sign != 0:
+          self.sign_change_counter = 20  # 200 ms coast window at 100 Hz
+        if self.sign_change_counter > 0:
+          gas, brake = 0.0, 0.0
+          self.sign_change_counter -= 1
+        if accel_sign != 0:
+          self.last_accel_sign = accel_sign
     else:
       accel = 0.0
       gas, brake = 0.0, 0.0
+      self.last_accel_cmd = 0.0
+      self.last_accel_sign = 0
+      self.sign_change_counter = 0
 
     # *** rate limit / filter steer ***
     limited_torque, lkas_active = self._update_steering_torque(CC, CS, live)
