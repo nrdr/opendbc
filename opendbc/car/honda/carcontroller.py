@@ -784,8 +784,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.steering_pressed_robust_prev = False
 
     # Bosch extra-brake controller
-    self.brake_pid = PIDController(k_p=([0,], [0,]),
-                                   k_i=([0.], [0.5]),
+    self.brake_pid = PIDController(k_p=0.0,
+                                   k_i=1.0,
                                    pos_limit=0.0,
                                    neg_limit=-2.0,
                                    rate=50)
