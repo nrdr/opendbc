@@ -223,6 +223,17 @@ class CarState(CarStateBase, CarStateExt):
         steer_threshold = int(custom) if stock_threshold == 1200 else stock_threshold * int(custom) / 1200.0
     except (TypeError, ValueError):
       pass
+    # Override Threshold Center Boost: reuse the Center Boost degree band as a straight/curve
+    # detector. When the wheel is within that band (a straight) use a lower override threshold
+    # so the driver can override easily; outside it (a curve) keep the higher threshold so a
+    # mid-corner torque spike doesn't get misread as an override and drop steering.
+    try:
+      cb_deg = float(self.params.get("HondaCenterBoostThreshold"))
+      cb_custom = self.params.get("NrdrOverrideThresholdCenterBoost")
+      if cb_deg > 0.0 and cb_custom is not None and int(cb_custom) > 0 and abs(ret.steeringAngleDeg) <= cb_deg:
+        steer_threshold = int(cb_custom) if stock_threshold == 1200 else stock_threshold * int(cb_custom) / 1200.0
+    except (TypeError, ValueError):
+      pass
     if self.params.get_bool("NrdrIncreaseOverrideTolerance") and self.CP.carFingerprint in (
       CAR.HONDA_CLARITY,
       CAR.HONDA_CIVIC,
