@@ -14,6 +14,7 @@ class HondaFlagsSP(IntFlag):
   HYBRID_ALT_BRAKEHOLD = 4
   HAS_CAMERA_MESSAGES = 8
   STOCK_LONGITUDINAL = 16
+  LAT_TUNE_BAKED = 32  # full per-band lateral tune lives in interface.py; latcontrol neutralizes the UI scale sliders
 
 
 class HondaSafetyFlagsSP:

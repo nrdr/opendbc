@@ -365,22 +365,30 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.HONDA_CLARITY:
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 1663], [0, 1663]]
-      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.03], [0.01]]
-      stock_cp.lateralTuning.pid.kf = 0.000012
+      # Full lateral tune baked in (was UI scales P/I 60/80/100, kf 20/30/50 on a 0.03 / 0.01 /
+      # 1.2e-5 base). Doubled breakpoints at 25 / 50 mph reproduce the old hard speed bands
+      # (matching latcontrol _LAT_SCALE_*_MAX) instead of interpolating across them. LAT_TUNE_BAKED
+      # tells latcontrol this car's P/I/F scale sliders are neutral -- the tune lives here now.
+      _bake_bp = [11.175, 11.176, 22.351, 22.352]  # 25 / 50 mph hard-band edges, m/s
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bake_bp, [0.018, 0.024, 0.024, 0.03]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bake_bp, [0.006, 0.008, 0.008, 0.01]]
+      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback if kfBP/kfV unavailable (stale capnp)
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bake_bp, [2.4e-6, 3.6e-6, 3.6e-6, 6.0e-6]]
+      ret.flags |= HondaFlagsSP.LAT_TUNE_BAKED.value
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
     elif candidate == CAR.HONDA_CIVIC:
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.06], [0.02]]
-      stock_cp.lateralTuning.pid.kf = 0.000024
+      stock_cp.lateralTuning.pid.kf = 0.000012  # 50% kf (was 0.000024); P/I stay on the default 100/135/200 bands
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.06], [0.02]]
-      stock_cp.lateralTuning.pid.kf = 0.000024
+      stock_cp.lateralTuning.pid.kf = 0.000012  # 50% kf (was 0.000024); P/I stay on the default 100/135/200 bands
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
