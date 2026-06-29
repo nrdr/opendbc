@@ -188,7 +188,7 @@ def _alt_dashboard_accel_distance(accel):
 
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
                    speed_design=ALT_SPEED_STOCK, distance_design=ALT_DIST_STOCK,
-                   sub_mode_active=False, sub_mode_blink_on=True,
+                   sub_mode_active=False, blink_on=True, max_flash_active=False,
                    lead_speed_display=0.0, gps_speed_display=0.0, cluster_speed_display=0.0, vehicle_accel=0.0,
                    clear_dash_faults=True):
   if sub_mode_active:
@@ -236,10 +236,15 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
   if sub_mode_active:
     # Bars show the current personality no matter the engagement state, blinking.
     send_acc_on = True
-    acc_on = 1 if sub_mode_blink_on else 0
-    mini_car = 1 if sub_mode_blink_on else (1 if enabled else 0)
-    if not (enabled and sub_mode_blink_on):
+    acc_on = 1 if blink_on else 0
+    mini_car = 1 if blink_on else (1 if enabled else 0)
+    if not (enabled and blink_on):
       cruise_speed = 255  # blank: set speed only shows while engaged, and blinks too
+
+  # System speed-limit flash: blink ONLY the set-speed digits (priority, independent of the sub-mode).
+  # Shares blink_on with the sub-mode so the two never desync; touches nothing else on the cluster.
+  if max_flash_active and enabled and speed_design == ALT_SPEED_STOCK and not blink_on:
+    cruise_speed = 255
 
   acc_hud_values = {
     'CRUISE_SPEED': cruise_speed,

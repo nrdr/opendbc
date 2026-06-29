@@ -18,6 +18,8 @@ from opendbc.car.honda.values import CAR, CruiseButtons, HONDA_BOSCH, HONDA_BOSC
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.common.pid import PIDController
 
+ButtonType = structs.CarState.ButtonEvent.Type
+
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
 from opendbc.sunnypilot.car.honda.icbm import IntelligentCruiseButtonManagementInterface
@@ -754,6 +756,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.param_reader = Params()
     self.param_writer = HondaParamWriter()
 
+    # System speed-flash (speed limit bumped the max while engaged): track the displayed set speed,
+    # the last user cruise +/- press, and the 5 s flash deadline. Shares the sub-mode blink clock.
+    self._sys_flash_until = 0.0
+    self._prev_set_speed = None
+    self._last_user_cruise_btn_t = -1e9
+
     self.braking = False
     self.brake_steady = 0.
     self.brake_last = 0.
@@ -865,32 +873,40 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "ecu_matched_long": get_param_bool(self.param_reader, "NrdrHondaEcuMatchedLong", False),
     }
 
-  @staticmethod
-  def _hud_sub_mode_state(live):
-    """Dynamic HUD sub-mode + blink state from the shared NrdrHudSubModeUntil deadline.
-
-    The blink accelerates across the whole user-set window: a lazy ~1000ms phase on
-    a fresh press, ramping down to a 500ms floor right before the sub-mode cuts off,
-    so you can always tell how much time is left whether the window is 5s or 60s. The
-    ACC HUD carrying this blink is only sent at 10 Hz (frame % 10), so phases are kept
-    >= 500ms and quantized to the 100ms send grid - a faster toggle aliases against the
-    send rate and draws inconsistently to the cluster."""
-    if not live["sub_mode_enabled"]:
-      return False, True
+  def _update_system_speed_flash(self, CC, CS, hud_control):
+    """Detect a SYSTEM-driven set-speed change (e.g. the speed limit bumping the max) and arm a 5 s
+    flash. Runs every frame. Notes any user cruise +/- press so a change the driver made themselves
+    does NOT flash; a change while engaged with no recent press is the system, so we flash. Once
+    armed it fires regardless of sub-mode state (priority)."""
     now = time.monotonic()
-    remaining = live["sub_mode_until"] - now
-    if remaining <= 0.0:
-      return False, True
-    window_s = live["sub_mode_window_s"]
-    # The ACC HUD carrying this blink is only sent at 10 Hz (frame % 10 below), so each
-    # on/off phase must span several sends or it aliases. Ramp the phase from a lazy
-    # 1000ms (fresh press) down to a 500ms floor (about to time out), quantized to the
-    # 100ms send grid so every phase is a whole number of HUD frames.
+    if any(b.pressed and b.type in (ButtonType.accelCruise, ButtonType.decelCruise) for b in CS.out.buttonEvents):
+      self._last_user_cruise_btn_t = now
+    set_speed = hud_control.setSpeed if hud_control.speedVisible else None
+    if (set_speed is not None and self._prev_set_speed is not None and set_speed != self._prev_set_speed
+        and CC.enabled and (now - self._last_user_cruise_btn_t) > 0.7):
+      self._sys_flash_until = now + 5.0
+    self._prev_set_speed = set_speed
+
+  def _hud_sub_mode_state(self, live):
+    """Sub-mode + system-flash blink state on ONE shared clock so the two can never desync. The
+    blink is a calm 1000ms phase, snapping to 500ms (twice as fast) in the final 5 s of whichever
+    window ends soonest. 500ms is the floor: this ACC HUD frame is also the Nidec throttle command
+    at 10 Hz, so a faster toggle aliases the send grid and would change the longitudinal cadence.
+    Returns (sub_mode_active, sys_flash_active, blink_on)."""
+    now = time.monotonic()
+    sub_active = bool(live["sub_mode_enabled"]) and (live["sub_mode_until"] - now) > 0.0
+    sys_active = (self._sys_flash_until - now) > 0.0
+    if not sub_active and not sys_active:
+      return False, False, True
+    remaining = min(
+      live["sub_mode_until"] - now if sub_active else float('inf'),
+      self._sys_flash_until - now if sys_active else float('inf'),
+    )
     HUD_SEND_MS = 100.0
-    phase_ms = float(np.interp(remaining, [0.0, window_s], [500.0, 1000.0]))
+    phase_ms = 500.0 if remaining <= 5.0 else 1000.0
     phase_ms = max(HUD_SEND_MS, round(phase_ms / HUD_SEND_MS) * HUD_SEND_MS)
     blink_on = (now * 1000.0) % (2.0 * phase_ms) < phase_ms
-    return True, blink_on
+    return sub_active, sys_active, blink_on
 
   def _update_steering_torque(self, CC, CS, live):
     torque_cmd = float(CC.actuators.torque) if CC.latActive else 0.0
@@ -968,6 +984,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     actuators = CC.actuators
     hud_control = CC.hudControl
     hud_v_cruise = hud_control.setSpeed / CS.v_cruise_factor if hud_control.speedVisible else 255
+    self._update_system_speed_flash(CC, CS, hud_control)
     pcm_cancel_cmd = CC.cruiseControl.cancel
 
     if len(CC.orientationNED) == 3:
@@ -1199,11 +1216,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         lead_speed_display = hud_control.leadVLead / v_factor
         gps_speed_display = CS.out.vEgo / v_factor
         cluster_speed_display = (CS.out.vEgoCluster or CS.out.vEgo) / v_factor
-        sub_mode_active, sub_mode_blink_on = self._hud_sub_mode_state(live)
+        sub_mode_active, sys_flash_active, blink_on = self._hud_sub_mode_state(live)
         can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, pcm_accel,
                                                  hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
                                                  speed_design=live["alt_dashboard_speed"], distance_design=live["alt_dashboard_distance"],
-                                                 sub_mode_active=sub_mode_active, sub_mode_blink_on=sub_mode_blink_on,
+                                                 sub_mode_active=sub_mode_active, blink_on=blink_on, max_flash_active=sys_flash_active,
                                                  lead_speed_display=lead_speed_display, gps_speed_display=gps_speed_display,
                                                  cluster_speed_display=cluster_speed_display, vehicle_accel=CS.out.aEgo,
                                                  clear_dash_faults=live["clear_dash_faults"]))
