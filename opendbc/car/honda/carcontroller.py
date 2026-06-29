@@ -857,7 +857,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "clear_dash_faults": get_param_bool(self.param_reader, "NrdrClearDashFaults", True),
       "spoof_camera_messages": get_param_bool(self.param_reader, "HondaSpoofCameraMessages", False),
       # Dynamic HUD (Cruise Button Sub-Mode)
-      "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrCruiseButtonSubMode", True),
+      "sub_mode_enabled": get_param_bool(self.param_reader, "NrdrCruiseButtonSubMode", False),
       "sub_mode_until": get_param_float(self.param_reader, "NrdrHudSubModeUntil", 0.0, 0.0),
       # Must stay in range with SUBMODE_WINDOW_MIN/MAX in openpilot selfdrive/controls/lib/nrdr_hud_submode.py
       "sub_mode_window_s": get_param_float(self.param_reader, "NrdrCruiseButtonSubModeSecs", 15.0, 5.0, 60.0),
