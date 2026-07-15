@@ -537,7 +537,7 @@ BRAKE_PROFILES_PATH = "/data/honda_brake_profiles.json"
 BRAKE_LEARN_VERSION = 1
 
 _BRAKE_EMA_ALPHA = 0.1          # EMA on brake RELEASE folding the converged integrator into its bin
-_BRAKE_PRELOAD_CAP = -0.5       # m/s^2: most negative preload allowed (conservative; pos side capped at 0.0)
+_BRAKE_PRELOAD_CAP = -0.15       # m/s^2: most negative preload allowed (conservative; pos side capped at 0.0)
 _BRAKE_DECAY_PER_MIN = 0.01     # whole map decays toward 0 at x0.99/min while idle
 _BRAKE_LEARNER_DT = 2 * DT_CTRL # update() runs on the frame % 2 == 0 cadence -> 0.02 s/tick
 _BRAKE_DECAY_PER_TICK = _BRAKE_DECAY_PER_MIN / 60.0 * _BRAKE_LEARNER_DT
@@ -798,7 +798,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
     # Bosch extra-brake controller
     self.brake_pid = PIDController(k_p=0.0,
-                                   k_i=1.0,
+                                   k_i=0.5,
                                    pos_limit=0.0,
                                    neg_limit=-2.0,
                                    rate=50)
@@ -1112,34 +1112,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         ts = self.frame * DT_CTRL
 
         if self.CP.carFingerprint in HONDA_BOSCH:
-          brake_active = (accel < 0) and (CS.out.vEgo > 1e-3)
-
-          # G3 brake-integrator memory tick (same 2-frame cadence as the brake controller).
-          # On the engagement edge it returns a bounded, pitch-scaled preload; on release it
-          # EMA-caches the converged integrator. The command-path semantics below are unchanged
-          # except that brake_pid.i is preloaded (instead of starting from a reset 0) at onset.
-          preload = self._brake_memory.update(
-            braking=brake_active,
-            integrator=float(self.brake_pid.i),
-            v_ego=CS.out.vEgo,
-            a_ego=CS.out.aEgo,
-            pitch=self.pitch,
-          )
-
-          if brake_active:
-            if not self._brake_active_prev:
-              # ENGAGEMENT edge: preload the integrator instead of leaving it at the reset 0.
-              # Bounded to [_BRAKE_PRELOAD_CAP, 0.0] inside BrakeMemory; clamp again belt-and-suspenders.
-              self.brake_pid.i = float(np.clip(preload, _BRAKE_PRELOAD_CAP, 0.0))
-            brake_addon = self.brake_pid.update(error = accel - CS.out.aEgo, speed = CS.out.vEgo)
-            targetaccel = min(accel,accel + brake_addon)
-          else:
-            self.brake_pid.reset()
-            brake_addon = 0.0
-            targetaccel = accel
-          self._brake_active_prev = brake_active
-
-          self.accel = float(np.clip(targetaccel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
+          # nrdr: extra-brake PID DISABLED.
+          brake_addon = 0.0
+          self.accel = float(np.clip(accel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
           gas_pedal_force = accel + wind_brake_ms2 * self._learner.windfactor + hill_brake
 
           # live-learn gas pedal adjustments when openpilot is controlling gas (G1+G4)
