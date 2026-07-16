@@ -17,10 +17,14 @@ Notes:
 """
 
 # {carFingerprint: (|steering wheel angle| breakpoints [deg], steer ratio values)}
+# v2 (pure rack): torque-corrected fit - column-twist effects excluded, so this is the
+# geometry map the PID setpoint path wants. Near-flat ~16.6 through normal driving,
+# tapering only past ~100 deg (parking/lock). v1 (twist-baked) measured effective
+# ratio including average LKAS column flex; that belongs in the torque domain, not here.
+# Low-torque holdout yaw RMSE: v2 0.0046 vs v1 0.0053 vs best flat scalar 0.0045.
 SR_ANGLE_CURVES: dict[str, tuple[list[float], list[float]]] = {
   "HONDA_CLARITY": (
-    [3., 4., 5., 6., 7., 9., 11., 14., 17., 21., 26., 33., 41., 51., 63., 79., 98., 122., 188., 234., 362., 450.],
-    [16.60, 17.10, 17.55, 17.05, 17.12, 18.04, 18.17, 19.02, 17.80, 17.89, 18.02, 18.01,
-     17.68, 17.04, 17.09, 16.88, 16.28, 15.81, 15.12, 14.95, 14.35, 14.02],
+    [0., 6., 12., 20., 32., 48., 70., 100., 140., 200., 300., 450.],
+    [16.84, 16.39, 16.57, 16.78, 16.84, 16.72, 16.40, 15.94, 15.40, 14.95, 14.55, 13.95],
   ),
 }
