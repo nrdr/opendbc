@@ -27,6 +27,9 @@ SR_ANGLE_CURVES: dict[str, tuple[list[float], list[float]]] = {
     [0., 6., 12., 20., 32., 48., 70., 100., 140., 200., 300., 450.],
     # v2.1: tail bent to the owner's proven lock ratio (12.74, from the original on-car
     # measurement; preferred by road feel over the v2 fit's 13.95). <=140 deg unchanged.
-    [16.84, 16.39, 16.57, 16.78, 16.84, 16.72, 16.40, 15.94, 15.40, 14.30, 13.40, 12.74],
+    # v2.2: center anchored to the owner's months-validated 17.00 (inside the fit's
+    # uncertainty band; also removes the 6-deg fit-noise dip and makes the curve
+    # monotone from center). 20 deg onward unchanged from v2.1.
+    [17.00, 17.00, 16.90, 16.84, 16.84, 16.72, 16.40, 15.94, 15.40, 14.30, 13.40, 12.74],
   ),
 }
