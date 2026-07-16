@@ -160,50 +160,6 @@ def torque_lpf_tau(v_ego: float, low_tau: float, standard_tau: float, highway_ta
   return highway_tau
 
 
-def notch_biquad_coeffs(f0: float, q: float, fs: float):
-  # Standard RBJ notch (band-reject) biquad. Removes a narrow band around f0 (Hz)
-  # with width set by q (higher q = narrower). Near-zero phase lag away from f0,
-  # so it kills a fixed EPS resonance without the broadband delay a LPF adds.
-  q = max(q, 0.1)
-  w0 = 2.0 * math.pi * (f0 / fs)
-  cos_w0 = math.cos(w0)
-  alpha = math.sin(w0) / (2.0 * q)
-  b0 = 1.0
-  b1 = -2.0 * cos_w0
-  b2 = 1.0
-  a0 = 1.0 + alpha
-  a1 = -2.0 * cos_w0
-  a2 = 1.0 - alpha
-  return (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
-
-
-class NotchFilter:
-  # Direct-form-II transposed biquad. Recomputes coeffs only when freq/q change.
-  def __init__(self, fs: float):
-    self.fs = fs
-    self.f0 = 0.0
-    self.q = 0.0
-    self.b0 = 1.0
-    self.b1 = 0.0
-    self.b2 = 0.0
-    self.a1 = 0.0
-    self.a2 = 0.0
-    self.z1 = 0.0
-    self.z2 = 0.0
-
-  def reset(self):
-    self.z1 = 0.0
-    self.z2 = 0.0
-
-  def update(self, x: float, f0: float, q: float) -> float:
-    if f0 != self.f0 or q != self.q:
-      self.f0, self.q = f0, q
-      self.b0, self.b1, self.b2, self.a1, self.a2 = notch_biquad_coeffs(f0, q, self.fs)
-    y = self.b0 * x + self.z1
-    self.z1 = self.b1 * x - self.a1 * y + self.z2
-    self.z2 = self.b2 * x - self.a2 * y
-    return y
-
 
 # Sidecar path for fingerprint + version metadata (does NOT touch params_keys.h)
 LEARNER_META_PATH = "/data/honda_learner_meta.json"
@@ -798,7 +754,6 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.last_acc_enabled = False
 
     self.torque_lpf = 0.0
-    self.notch_filter = NotchFilter(1.0 / DT_CTRL)
     self.prev_torque_cmd = 0.0
     self.override_ramp = 1.0
     self.lat_active_prev = False
@@ -859,9 +814,6 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       "lpf_tau_low": get_param_float(self.param_reader, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
       "lpf_tau_standard": get_param_float(self.param_reader, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
       "lpf_tau_highway": get_param_float(self.param_reader, "HondaLpfTauHighway", 0.1, 0.0, 5.0),
-      "notch_enabled": get_param_bool(self.param_reader, "HondaNotchEnabled", False),
-      "notch_freq": get_param_float(self.param_reader, "HondaNotchFreq", 7.5, 1.0, 20.0),
-      "notch_q": get_param_float(self.param_reader, "HondaNotchQ", 1.5, 0.1, 10.0),
       "steer_delta_limiter_enabled": get_param_bool(self.param_reader, "HondaSteerDeltaLimiter", False),
       "steer_delta_up": get_param_float(self.param_reader, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
       "steer_delta_down": get_param_float(self.param_reader, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
@@ -955,18 +907,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       else:
         self.torque_lpf = torque_cmd
 
-      # Notch filter (in series, after LPF): removes the narrow EPS chatter band
-      # (~7Hz) without the broadband lag a LPF adds. Independently toggleable.
-      if live["notch_enabled"]:
-        torque_cmd = self.notch_filter.update(torque_cmd, live["notch_freq"], live["notch_q"])
-      else:
-        self.notch_filter.reset()
 
       self.prev_torque_cmd = torque_cmd
     else:
       self.override_ramp = 0.0
       self.torque_lpf = 0.0
-      self.notch_filter.reset()
       self.prev_torque_cmd = 0.0
       self.steering_pressed_filter_s = 0.0
       self.steering_pressed_robust_prev = False
