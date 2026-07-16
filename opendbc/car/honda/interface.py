@@ -372,7 +372,8 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.030]]
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.010]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 3.6e-6, 6.0e-6]]
+      # nrdr 07/26: FF halved at 25mph+ (was [2.4e-6, 3.6e-6, 6.0e-6]); low band kept
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
@@ -384,6 +385,7 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.06, 0.081, 0.12]]
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.02, 0.027, 0.04]]
       stock_cp.lateralTuning.pid.kf = 0.000012  # 50% kf (was 0.000024)
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [1.2e-5, 6.0e-6, 6.0e-6]]  # nrdr 07/26: FF halved at 25mph+
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
@@ -394,6 +396,7 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.06, 0.081, 0.12]]
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.02, 0.027, 0.04]]
       stock_cp.lateralTuning.pid.kf = 0.000012  # 50% kf (was 0.000024)
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [1.2e-5, 6.0e-6, 6.0e-6]]  # nrdr 07/26: FF halved at 25mph+
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
@@ -401,6 +404,8 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.06], [0.02]]
       stock_cp.lateralTuning.pid.kf = 0.000024
+      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-5, 1.2e-5, 1.2e-5]]  # nrdr 07/26: FF halved at 25mph+
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
@@ -408,6 +413,8 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.06], [0.02]]
       stock_cp.lateralTuning.pid.kf = 0.000024
+      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-5, 1.2e-5, 1.2e-5]]  # nrdr 07/26: FF halved at 25mph+
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
@@ -419,6 +426,9 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.HONDA_ACCORD:
       if ret.flags & HondaFlagsSP.EPS_MODIFIED:
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.09]]
+      # nrdr 07/26: FF halved at 25mph+ (upstream default kf 6.0e-5; low band kept)
+      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [6.0e-5, 3.0e-5, 3.0e-5]]
 
     elif candidate in (CAR.ACURA_MDX_3G, CAR.ACURA_MDX_3G_MMR): # source mlocoteta
       stock_cp.autoResumeSng = True
