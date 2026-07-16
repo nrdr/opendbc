@@ -25,6 +25,8 @@ Notes:
 SR_ANGLE_CURVES: dict[str, tuple[list[float], list[float]]] = {
   "HONDA_CLARITY": (
     [0., 6., 12., 20., 32., 48., 70., 100., 140., 200., 300., 450.],
-    [16.84, 16.39, 16.57, 16.78, 16.84, 16.72, 16.40, 15.94, 15.40, 14.95, 14.55, 13.95],
+    # v2.1: tail bent to the owner's proven lock ratio (12.74, from the original on-car
+    # measurement; preferred by road feel over the v2 fit's 13.95). <=140 deg unchanged.
+    [16.84, 16.39, 16.57, 16.78, 16.84, 16.72, 16.40, 15.94, 15.40, 14.30, 13.40, 12.74],
   ),
 }
