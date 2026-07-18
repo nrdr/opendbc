@@ -367,11 +367,13 @@ class CarInterface(CarInterfaceBase):
       # base). Speed-banded the stock way: interpolate across 0 / 25 / 50 mph. The UI P/I/F scales
       # default to a neutral 100% and act as fine-trim on top.
       _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.030]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.010]]
-      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      # nrdr 07/26: FF halved at 25mph+ (was [2.4e-6, 3.6e-6, 6.0e-6]); low band kept
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.0e-6]]
+      # nrdr 07/18: kp / ki / kf all doubled from the prior tune (was kpV [0.018, 0.024, 0.030],
+      # kiV [0.006, 0.008, 0.010], kf 3.6e-6, kfV [2.4e-6, 1.8e-6, 3.0e-6]). UI P/I/F scales (100%)
+      # trim on top of this, so these doubled values are the new neutral base.
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.036, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.012, 0.016, 0.020]]
+      stock_cp.lateralTuning.pid.kf = 7.2e-6  # scalar fallback; kfBP/kfV used when present
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [4.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
