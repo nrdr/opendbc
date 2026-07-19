@@ -362,8 +362,16 @@ class CarInterface(CarInterfaceBase):
       ret.flags |= HondaFlagsSP.HAS_CAMERA_MESSAGES.value
 
     if candidate == CAR.HONDA_CLARITY:
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.03], [0.01]]
+      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 1663], [0, 1663]]
+      # Lateral tune lives here (was UI scales P/I 60/80/100, kf 20/30/50 on a 0.03 / 0.01 / 1.2e-5
+      # base). Speed-banded the stock way: interpolate across 0 / 25 / 50 mph. The UI P/I/F scales
+      # default to a neutral 100% and act as fine-trim on top.
+      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.030]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.010]]
+      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
+      # nrdr 07/26: FF halved at 25mph+ (was [2.4e-6, 3.6e-6, 6.0e-6]); low band kept
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
