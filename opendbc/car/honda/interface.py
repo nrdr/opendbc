@@ -365,14 +365,15 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.HONDA_CLARITY:
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      # Lateral tune lives here (was UI scales P/I 60/80/100, kf 20/30/50 on a 0.03 / 0.01 / 1.2e-5
-      # base). Speed-banded the stock way: interpolate across 0 / 25 / 50 mph. The UI P/I/F scales
-      # default to a neutral 100% and act as fine-trim on top.
-      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.036, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.012, 0.016, 0.020]]
+      # Bake in the road-tested 50% low-speed (<25 mph) PID trim so the live P/I/F scales can
+      # remain neutral at 100%. The close pair around 25 mph preserves the live scaler's existing
+      # hard handoff to the unchanged standard-speed tune.
+      _low_max = 25. * CV.MPH_TO_MS
+      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [4.8e-6, 3.6e-6, 6.0e-6]]
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
