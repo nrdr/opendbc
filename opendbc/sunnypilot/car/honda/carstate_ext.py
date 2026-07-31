@@ -39,3 +39,4 @@ class CarStateExt:
       # Same threshold as panda, equivalent to 1e-5 with previous DBC scaling
       gas = (cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS"] + cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS2"]) // 2
       ret.gasPressed = gas > 492
+      ret_sp.gasInterceptorState = int(cp.vl["GAS_SENSOR"]["STATE"])

@@ -681,22 +681,39 @@ class HondaParamWriter:
     self._thread = threading.Thread(target=self._run, name="honda-param-writer", daemon=True)
     self._thread.start()
 
-  def put_many(self, values):
-    self._queue.put({key: float(value) for key, value in values.items()})
+  def put_many(self, values, *, car_fingerprint=None, brake_bins=None):
+    # Snapshot every mutable value before handing it to the worker. This method runs in the
+    # 100 Hz controller path, so it must remain queue-only: no Params or filesystem writes.
+    self._queue.put((
+      {key: float(value) for key, value in values.items()},
+      car_fingerprint,
+      None if brake_bins is None else tuple(float(v) for v in brake_bins),
+    ))
 
   def _run(self):
     while True:
-      pending = self._queue.get()
+      pending, car_fingerprint, brake_bins = self._queue.get()
 
       # Collapse queued snapshots so delayed writes keep only the newest value per key.
       try:
         while True:
-          pending.update(self._queue.get_nowait())
+          newer, newer_fingerprint, newer_brake_bins = self._queue.get_nowait()
+          pending.update(newer)
+          if newer_fingerprint is not None:
+            car_fingerprint = newer_fingerprint
+            brake_bins = newer_brake_bins
       except Empty:
         pass
 
       for key, value in pending.items():
         self._params.put(key, value)
+
+      # JSON sidecars use fsync for crash-safe persistence. Keep both writes on this worker;
+      # an fsync in CarController.update can starve sendcan long enough to fault an interceptor.
+      if car_fingerprint is not None:
+        _write_learner_meta_atomic(car_fingerprint)
+        if brake_bins is not None:
+          _write_brake_profiles_atomic(car_fingerprint, brake_bins)
 
 
 class CarController(CarControllerBase, MadsCarController, GasInterceptorCarController, IntelligentCruiseButtonManagementInterface):
@@ -1187,11 +1204,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       self.param_writer.put_many({
         "HondaGasFactorParams": self._learner.raw_gasfactor,
         "HondaWindFactorParams": self._learner.raw_windfactor,
-      })
-      # Write sidecar atomically (fingerprint + LEARN_VERSION for G4 fingerprint check)
-      _write_learner_meta_atomic(self.CP.carFingerprint)
-      # G3: persist the brake-integrator memory (own atomic sidecar, no params_keys.h key)
-      _write_brake_profiles_atomic(self.CP.carFingerprint, self._brake_memory.bins)
+      }, car_fingerprint=self.CP.carFingerprint, brake_bins=self._brake_memory.bins)
 
     self.frame += 1
     return new_actuators, can_sends
