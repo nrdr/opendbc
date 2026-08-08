@@ -365,9 +365,6 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.HONDA_CLARITY:
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      # Bake in the road-tested 50% low-speed (<25 mph) PID trim so the live P/I/F scales can
-      # remain neutral at 100%. The close pair around 25 mph preserves the live scaler's existing
-      # hard handoff to the unchanged standard-speed tune.
       _low_max = 25. * CV.MPH_TO_MS
       _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
       stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
@@ -379,13 +376,12 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate == CAR.HONDA_CIVIC:
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      # Tune lives here: the old 100/135/200 P/I banding (tuned for this car) interpolated across
-      # 0 / 25 / 50 mph, plus 50% kf. UI scales default to a neutral 100%.
-      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.06, 0.081, 0.12]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.02, 0.027, 0.04]]
-      stock_cp.lateralTuning.pid.kf = 0.000012  # 50% kf (was 0.000024)
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [1.2e-5, 6.0e-6, 6.0e-6]]  # nrdr 07/26: FF halved at 25mph+
+      _low_max = 25. * CV.MPH_TO_MS
+      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
+      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
