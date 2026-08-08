@@ -365,8 +365,6 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
       _low_max = 25. * CV.MPH_TO_MS
       _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
       stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
@@ -376,8 +374,6 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
       _low_max = 25. * CV.MPH_TO_MS
       _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
       stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
@@ -387,8 +383,6 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
       _low_max = 25. * CV.MPH_TO_MS
       _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
       stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
@@ -398,8 +392,6 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
       _low_max = 25. * CV.MPH_TO_MS
       _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
       stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
@@ -409,8 +401,6 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
       _low_max = 25. * CV.MPH_TO_MS
       _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
       stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
       stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
@@ -449,6 +439,13 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 239], [0, 239]]
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0., 20], [0., 20]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4, 0.3], [0, 0]]
+
+    # nrdr Honda-wide PID schedule: one continuous linear ramp from 0 to 50 mph.
+    # Values clamp at either end, so every Honda/Acura starts at the low-speed
+    # gains and holds the high-speed gains from 50 mph upward.
+    _pid_gain_bp = [0., 50. * CV.MPH_TO_MS]
+    stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_pid_gain_bp, [0.03, 0.06]]
+    stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_pid_gain_bp, [0.01, 0.02]]
 
     if candidate in HONDA_BOSCH:
       pass
