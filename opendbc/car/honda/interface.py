@@ -387,30 +387,34 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
-      # Tune lives here: the old 100/135/200 P/I banding interpolated across 0 / 25 / 50 mph, 50% kf.
-      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.06, 0.081, 0.12]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.02, 0.027, 0.04]]
-      stock_cp.lateralTuning.pid.kf = 0.000012  # 50% kf (was 0.000024)
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [1.2e-5, 6.0e-6, 6.0e-6]]  # nrdr 07/26: FF halved at 25mph+
+      _low_max = 25. * CV.MPH_TO_MS
+      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
+      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
     elif candidate in (CAR.HONDA_INSIGHT, CAR.HONDA_NBOX_2G):
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.06], [0.02]]
-      stock_cp.lateralTuning.pid.kf = 0.000024
-      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-5, 1.2e-5, 1.2e-5]]  # nrdr 07/26: FF halved at 25mph+
+      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
+      _low_max = 25. * CV.MPH_TO_MS
+      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
+      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
     elif candidate == CAR.HONDA_CRV_5G:
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.06], [0.02]]
-      stock_cp.lateralTuning.pid.kf = 0.000024
-      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-5, 1.2e-5, 1.2e-5]]  # nrdr 07/26: FF halved at 25mph+
+      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
+      _low_max = 25. * CV.MPH_TO_MS
+      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_bp, [0.018, 0.024, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_bp, [0.006, 0.008, 0.016, 0.020]]
+      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
+      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
       stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
       stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
 
