@@ -17,6 +17,16 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFla
 
 TransmissionType = structs.CarParams.TransmissionType
 
+HONDA_TORQUE_MOD_PID_CARS = frozenset({
+  CAR.HONDA_ACCORD,
+  CAR.HONDA_CIVIC,
+  CAR.HONDA_CIVIC_BOSCH,
+  CAR.HONDA_CIVIC_BOSCH_DIESEL,
+  CAR.HONDA_CLARITY,
+  CAR.HONDA_CRV_5G,
+  CAR.HONDA_INSIGHT,
+})
+
 
 class CarInterface(CarInterfaceBase):
   CarState = CarState
@@ -440,12 +450,14 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0., 20], [0., 20]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4, 0.3], [0, 0]]
 
-    # nrdr Honda-wide PID schedule: one continuous linear ramp from 0 to 50 mph.
-    # Values clamp at either end, so every Honda/Acura starts at the low-speed
-    # gains and holds the high-speed gains from 50 mph upward.
-    _pid_gain_bp = [0., 50. * CV.MPH_TO_MS]
-    stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_pid_gain_bp, [0.03, 0.06]]
-    stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_pid_gain_bp, [0.01, 0.02]]
+    if candidate in HONDA_TORQUE_MOD_PID_CARS:
+      # Shared tune for the supported Honda torque-mod platforms. Keep the
+      # low-speed tune through 25 mph, then step to the standard tune and ramp
+      # it to the 50+ mph values.
+      _low_max = 25. * CV.MPH_TO_MS
+      _pid_gain_bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
+      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_pid_gain_bp, [0.018, 0.024, 0.048, 0.060]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_pid_gain_bp, [0.006, 0.008, 0.016, 0.020]]
 
     if candidate in HONDA_BOSCH:
       pass
