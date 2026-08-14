@@ -141,10 +141,11 @@ def get_honda_vgr_inverse(flags):
   return None
 
 
-# Only the Clarity coordinate correction was validated by vote_for_nobody
-# against road data (7 routes / about 23k samples). Keep the Civic C020 and
-# Insight learner unchanged until their position maps receive the same check.
-HONDA_VGR_LEARNING_FLAGS = (HondaFlags.VGR_CLARITY_TRW_A020,)
+# The road-tested Honda controller profiles now use direct two-point measured-
+# angle SR curves in latcontrol. Keep paramsd in its original published-angle
+# coordinate so those profiles match the restored Clarity behavior exactly.
+# The traced maps also remain unvalidated for learner-coordinate changes.
+HONDA_VGR_LEARNING_FLAGS = ()
 
 
 def get_honda_vgr_learning_inverse(flags):

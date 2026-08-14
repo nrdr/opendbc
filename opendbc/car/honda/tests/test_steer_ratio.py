@@ -49,8 +49,9 @@ def test_exact_modified_eps_firmware_selects_profile(version, profile):
   assert get_honda_vgr_profile([SimpleNamespace(ecu="eps", fwVersion=b"39990-XXX,A999\0\0")]) is None
 
 
-def test_only_road_validated_clarity_map_changes_paramsd_coordinate():
-  assert get_honda_vgr_learning_inverse(HondaFlags.VGR_CLARITY_TRW_A020) is not None
+def test_static_clarity_curve_leaves_paramsd_coordinate_unchanged():
+  assert get_honda_vgr_learning_inverse(HondaFlags.VGR_CLARITY_TRW_A020) is None
   assert get_honda_vgr_learning_inverse(HondaFlags.VGR_CIVIC_TBA_C020) is None
   assert get_honda_vgr_learning_inverse(HondaFlags.VGR_INSIGHT_TXM_A040) is None
+  assert get_honda_vgr_inverse(HondaFlags.VGR_CLARITY_TRW_A020) is not None
   assert get_honda_vgr_inverse(HondaFlags.VGR_CIVIC_TBA_C020) is not None
