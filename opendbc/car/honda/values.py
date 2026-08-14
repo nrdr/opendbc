@@ -81,6 +81,12 @@ class HondaFlags(IntFlag):
   BOSCH_TJA_CONTROL = 4096
   LKAS_MINSPEED_CUTOFF = 8192
 
+  # Exact EPS firmware profiles with position-table VGR maps traced by
+  # vote_for_nobody. Unknown EPS images intentionally receive no profile.
+  VGR_CLARITY_TRW_A020 = 16384
+  VGR_CIVIC_TBA_C020 = 32768
+  VGR_INSIGHT_TXM_A040 = 65536
+
 
 # Car button codes
 class CruiseButtons:

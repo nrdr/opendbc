@@ -5,6 +5,7 @@ from openpilot.common.params import Params, UnknownKeyName
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu, clear_all_dtcs, clear_ecu_dtcs
 from opendbc.car.honda.hondacan import CanBus
+from opendbc.car.honda.steer_ratio import get_honda_vgr_profile, HONDA_VGR_PROFILE_FLAGS
 from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HONDA_BOSCH, HONDA_BOSCH_CANFD, \
                                                  HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HondaSafetyFlags, \
                                                  RADAR_FW_0X280_INGEST
@@ -140,6 +141,12 @@ class CarInterface(CarInterfaceBase):
     for fw in car_fw:
       if fw.ecu == "eps" and b"," in fw.fwVersion:
         ret.dashcamOnly = True
+
+    # Select VGR only from the exact EPS image whose position table was traced.
+    # Unknown firmware deliberately retains the existing fingerprint behavior.
+    vgr_profile = get_honda_vgr_profile(car_fw)
+    if vgr_profile is not None:
+      ret.flags |= int(HONDA_VGR_PROFILE_FLAGS[vgr_profile])
 
     if candidate == CAR.HONDA_CIVIC:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 2560], [0, 2560]]
