@@ -163,7 +163,7 @@ class TestR1RangeKF(BoschCase):
 
   def test_arel_packed_after_convergence(self):
     seq = self._close_sequence(50.0, 0.0, 2)
-    self.assertTrue(all(math.isnan(p.aRel) for _, _, rr in seq for p in rr.points),
+    self.assertTrue(all(math.isnan(p.deprecated.aRel) for _, _, rr in seq for p in rr.points),
                     "aRel must stay NaN until the KF has a rate history")
     # decelerating-range scenario: closing accelerates -> aRel goes finite and negative-ish
     d = 50.0
@@ -174,8 +174,8 @@ class TestR1RangeKF(BoschCase):
       cntr = (0x80 + k) & 0xFF
       rr = self._emit((2 + k) * SWEEP_NS, [self._f(0x280, _hdr_frame(_raw_for(d), cntr=cntr))], cntr)
     p = rr.points[0]
-    self.assertFalse(math.isnan(p.aRel), "converged KF must pack a smoothed range-accel into aRel")
-    self.assertLess(p.aRel, 0.0)
+    self.assertFalse(math.isnan(p.deprecated.aRel), "converged KF must pack a smoothed range-accel into aRel")
+    self.assertLess(p.deprecated.aRel, 0.0)
 
   def test_6u8_regression_no_post_gap_vrel_halving(self):
     # The old EMA blended the FIRST post-reseed derivative with the stale pre-gap vRel (measured=True),

@@ -48,7 +48,8 @@ from opendbc.car.honda.carcontroller import (  # noqa: E402
 )
 
 assert _BRAKE_N_BINS == 4, f"expected 4 speed bins, got {_BRAKE_N_BINS}"
-assert _BRAKE_PRELOAD_CAP == -0.5, "preload cap must be -0.5 m/s^2 per spec"
+assert _BRAKE_PRELOAD_CAP == -0.15, "preload cap must match the road-tested brake-PID bound"
+TEST_PRELOAD = -0.10
 
 
 def _zeros():
@@ -93,21 +94,20 @@ class TestEMACacheOnRelease(unittest.TestCase):
   def test_release_folds_integrator_into_bin(self):
     mem = _mk()
     idx = _brake_bin_index(7.0)  # bin 2
-    _brake_episode(mem, integrator=-0.4, v_ego=7.0)
-    # EMA from 0.0: 0.9*0 + 0.1*(-0.4) = -0.04
-    self.assertAlmostEqual(mem.bins[idx], (1 - _BRAKE_EMA_ALPHA) * 0.0 + _BRAKE_EMA_ALPHA * -0.4,
+    _brake_episode(mem, integrator=TEST_PRELOAD, v_ego=7.0)
+    self.assertAlmostEqual(mem.bins[idx], (1 - _BRAKE_EMA_ALPHA) * 0.0 + _BRAKE_EMA_ALPHA * TEST_PRELOAD,
                            places=9)
 
   def test_repeated_episodes_converge_toward_value(self):
     mem = _mk()
     idx = _brake_bin_index(7.0)
     for _ in range(200):
-      _brake_episode(mem, integrator=-0.4, v_ego=7.0)
-    self.assertAlmostEqual(mem.bins[idx], -0.4, places=3)
+      _brake_episode(mem, integrator=TEST_PRELOAD, v_ego=7.0)
+    self.assertAlmostEqual(mem.bins[idx], TEST_PRELOAD, places=3)
 
   def test_only_engagement_bin_updated(self):
     mem = _mk()
-    _brake_episode(mem, integrator=-0.3, v_ego=1.0)  # bin 0
+    _brake_episode(mem, integrator=TEST_PRELOAD, v_ego=1.0)  # bin 0
     self.assertLess(mem.bins[0], 0.0)
     self.assertEqual(mem.bins[1], 0.0)
     self.assertEqual(mem.bins[2], 0.0)
@@ -115,20 +115,20 @@ class TestEMACacheOnRelease(unittest.TestCase):
 
   def test_release_outside_bins_no_update(self):
     mem = _mk()
-    _brake_episode(mem, integrator=-0.4, v_ego=25.0)  # >= top edge
+    _brake_episode(mem, integrator=TEST_PRELOAD, v_ego=25.0)  # >= top edge
     self.assertEqual(mem.bins, _zeros())
 
 
 class TestPreloadOnEngagement(unittest.TestCase):
   def test_preload_returned_on_engage_edge(self):
-    mem = _mk(bins=[-0.3, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     p = mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0, pitch=0.0)
-    self.assertAlmostEqual(p, -0.3, places=9)
+    self.assertAlmostEqual(p, TEST_PRELOAD, places=9)
 
   def test_no_preload_when_not_engage_edge(self):
-    mem = _mk(bins=[-0.3, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0, pitch=0.0)  # engage
-    p = mem.update(braking=True, integrator=-0.2, v_ego=1.0, a_ego=-1.0, pitch=0.0)  # sustain
+    p = mem.update(braking=True, integrator=TEST_PRELOAD, v_ego=1.0, a_ego=-1.0, pitch=0.0)  # sustain
     self.assertEqual(p, 0.0)
 
   def test_preload_zero_for_empty_bin(self):
@@ -158,7 +158,7 @@ class TestPreloadCap(unittest.TestCase):
 
 class TestDecay(unittest.TestCase):
   def test_idle_decays_toward_zero(self):
-    mem = _mk(bins=[-0.4, -0.4, -0.4, -0.4])
+    mem = _mk(bins=[TEST_PRELOAD] * _BRAKE_N_BINS)
     before = list(mem.bins)
     for _ in range(50):
       mem.update(braking=False, integrator=0.0, v_ego=0.0, a_ego=0.0, pitch=0.0)
@@ -168,10 +168,10 @@ class TestDecay(unittest.TestCase):
 
   def test_decay_rate_magnitude(self):
     # one idle tick moves a bin toward 0 by _BRAKE_DECAY_PER_TICK * |cap| (x0.99/min cadence)
-    mem = _mk(bins=[-0.4, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     mem.update(braking=False, integrator=0.0, v_ego=0.0, a_ego=0.0, pitch=0.0)
     step = _BRAKE_DECAY_PER_TICK * (-_BRAKE_PRELOAD_CAP)
-    self.assertAlmostEqual(mem.bins[0], -0.4 + step, places=9)
+    self.assertAlmostEqual(mem.bins[0], TEST_PRELOAD + step, places=9)
 
   def test_decay_does_not_cross_zero(self):
     mem = _mk(bins=[-1e-6, 0.0, 0.0, 0.0])
@@ -187,8 +187,8 @@ class TestVarianceDiscard(unittest.TestCase):
     # engage, then sustain with wildly varying aEgo -> variance > discard threshold
     mem.update(braking=True, integrator=0.0, v_ego=7.0, a_ego=-3.0, pitch=0.0)
     for a in (2.0, -3.0, 2.0, -3.0, 2.0, -3.0):
-      mem.update(braking=True, integrator=-0.4, v_ego=7.0, a_ego=a, pitch=0.0)
-    mem.update(braking=False, integrator=-0.4, v_ego=7.0, a_ego=0.0, pitch=0.0)
+      mem.update(braking=True, integrator=TEST_PRELOAD, v_ego=7.0, a_ego=a, pitch=0.0)
+    mem.update(braking=False, integrator=TEST_PRELOAD, v_ego=7.0, a_ego=0.0, pitch=0.0)
     self.assertEqual(mem.bins[idx], 0.0, "noisy episode must not be cached")
 
   def test_low_variance_episode_kept(self):
@@ -196,8 +196,8 @@ class TestVarianceDiscard(unittest.TestCase):
     idx = _brake_bin_index(7.0)
     mem.update(braking=True, integrator=0.0, v_ego=7.0, a_ego=-1.0, pitch=0.0)
     for _ in range(6):
-      mem.update(braking=True, integrator=-0.4, v_ego=7.0, a_ego=-1.0, pitch=0.0)
-    mem.update(braking=False, integrator=-0.4, v_ego=7.0, a_ego=-1.0, pitch=0.0)
+      mem.update(braking=True, integrator=TEST_PRELOAD, v_ego=7.0, a_ego=-1.0, pitch=0.0)
+    mem.update(braking=False, integrator=TEST_PRELOAD, v_ego=7.0, a_ego=-1.0, pitch=0.0)
     self.assertLess(mem.bins[idx], 0.0, "steady episode must be cached")
 
   def test_threshold_boundary(self):
@@ -206,27 +206,27 @@ class TestVarianceDiscard(unittest.TestCase):
 
 class TestPitchScaling(unittest.TestCase):
   def test_downhill_reduces_preload(self):
-    mem = _mk(bins=[-0.4, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     flat = mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0, pitch=0.0)
     mem._was_braking = False  # reset edge state
     down = mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0, pitch=-0.3)
     self.assertGreater(down, flat, "downhill (gravity helps) must reduce preload magnitude")
 
   def test_steep_downhill_zeroes_preload(self):
-    mem = _mk(bins=[-0.4, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     p = mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0,
                    pitch=-math.pi / 2)  # sin(pitch) = -1 -> scale clamps to 0
     self.assertAlmostEqual(p, 0.0, places=9)
 
   def test_uphill_does_not_amplify_beyond_cache(self):
-    mem = _mk(bins=[-0.4, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     up = mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0, pitch=0.3)
-    self.assertGreaterEqual(up, -0.4 - 1e-12, "uphill scale capped at 1.0 (never amplifies)")
+    self.assertGreaterEqual(up, TEST_PRELOAD - 1e-12, "uphill scale capped at 1.0 (never amplifies)")
 
   def test_nan_pitch_full_preload(self):
-    mem = _mk(bins=[-0.4, 0.0, 0.0, 0.0])
+    mem = _mk(bins=[TEST_PRELOAD, 0.0, 0.0, 0.0])
     p = mem.update(braking=True, integrator=0.0, v_ego=1.0, a_ego=-1.0, pitch=float("nan"))
-    self.assertAlmostEqual(p, -0.4, places=9)
+    self.assertAlmostEqual(p, TEST_PRELOAD, places=9)
 
 
 class TestNaNSafety(unittest.TestCase):
@@ -240,7 +240,7 @@ class TestNaNSafety(unittest.TestCase):
     self.assertEqual(mem.bins[idx], 0.0)
 
   def test_preload_always_finite(self):
-    for bins in ([-0.4, 0, 0, 0], [float("nan"), 0, 0, 0]):
+    for bins in ([TEST_PRELOAD, 0, 0, 0], [float("nan"), 0, 0, 0]):
       mem = _mk(bins=bins)
       for v in (0.0, 1.0, 7.0, 25.0, float("nan")):
         for p in (0.0, 0.3, -0.3, float("nan")):
@@ -261,7 +261,7 @@ class TestFingerprintReset(unittest.TestCase):
       orig = cc.BRAKE_PROFILES_PATH
       cc.BRAKE_PROFILES_PATH = path
       try:
-        bins = [-0.3, -0.2, -0.1, -0.05]
+        bins = [-0.12, -0.10, -0.08, -0.05]
         cc._write_brake_profiles_atomic("HONDA_CIVIC_BOSCH", bins)
         self.assertFalse(os.path.exists(path + ".tmp"), "atomic write leaves no .tmp")
         loaded = cc._load_brake_profiles("HONDA_CIVIC_BOSCH")
@@ -277,7 +277,7 @@ class TestFingerprintReset(unittest.TestCase):
       orig = cc.BRAKE_PROFILES_PATH
       cc.BRAKE_PROFILES_PATH = path
       try:
-        cc._write_brake_profiles_atomic("HONDA_CIVIC_BOSCH", [-0.3, -0.2, -0.1, -0.05])
+        cc._write_brake_profiles_atomic("HONDA_CIVIC_BOSCH", [-0.12, -0.10, -0.08, -0.05])
         loaded = cc._load_brake_profiles("ACURA_RDX_3G")
         self.assertEqual(loaded, _zeros(), "fingerprint mismatch -> reset to zeros")
       finally:
@@ -292,7 +292,7 @@ class TestFingerprintReset(unittest.TestCase):
       try:
         self._write(path, {"car_fingerprint": "HONDA_CIVIC_BOSCH",
                            "learn_version": BRAKE_LEARN_VERSION + 99,
-                           "bins": [-0.3, -0.2, -0.1, -0.05]})
+                           "bins": [-0.12, -0.10, -0.08, -0.05]})
         loaded = cc._load_brake_profiles("HONDA_CIVIC_BOSCH")
         self.assertEqual(loaded, _zeros(), "version mismatch -> reset to zeros")
       finally:

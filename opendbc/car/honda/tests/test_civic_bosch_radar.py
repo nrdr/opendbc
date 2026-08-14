@@ -159,8 +159,8 @@ class TestCivicBoschFineParser(unittest.TestCase):
     self.assertAlmostEqual(p.dRel, 0.00357 * 3999 - 3.0, places=4)
     # S5: vRel is derived; on the birth cycle it derives from the prime cycle (steady range -> ~0), so the
     # point is measured. vRel here is a real (near-zero) derived value, not NaN.
-    self.assertTrue(p.measured)
-    self.assertTrue(math.isnan(p.aRel))
+    self.assertTrue(p.deprecated.measured)
+    self.assertTrue(math.isnan(p.deprecated.aRel))
     self.assertFalse(math.isnan(p.vRel))  # derived from the prime cycle (steady -> ~0)
 
   def test_b1_tag_gate_skips_nonheader(self):
@@ -349,7 +349,7 @@ class TestCivicBoschFineParser(unittest.TestCase):
     rr = self._emit(2 * dt_ns, [self._f(0x280, _hdr_frame(far_raw, cntr=0x12))], 0x12)
     p = rr.points[0]
     self.assertTrue(math.isnan(p.vRel))               # phantom rejected -> NaN, not ~1900 m/s
-    self.assertFalse(p.measured)                       # S5: NaN vRel -> estimate, not a measurement
+    self.assertFalse(p.deprecated.measured)            # S5: NaN vRel -> estimate, not a measurement
     self.assertAlmostEqual(p.dRel, 0.00357 * far_raw - 3.0, places=2)  # dRel still tracks the new object
     id_b = p.trackId                                   # object B's trackId (post-swap)
     # S1 core assertion: the swap produced a NEW trackId (no reuse). Both still decode to slot 0.
@@ -499,12 +499,12 @@ class TestCivicBoschFineSafeParity(unittest.TestCase):
     self._emit(0, [self._f(0x280, _hdr_frame(4000, cntr=0x10))], 0x10)            # prime
     rr = self._emit(1, [self._f(0x280, _hdr_frame(3900, cntr=0x11))], 0x11)       # born, derived vRel
     self.assertFalse(math.isnan(rr.points[0].vRel))
-    self.assertTrue(rr.points[0].measured)
+    self.assertTrue(rr.points[0].deprecated.measured)
     # Force a re-seed via a discontinuity -> vRel NaN this cycle -> measured False.
     far = int((120.0 + 3.0) / 0.00357)
     rr = self._emit(2, [self._f(0x280, _hdr_frame(far, cntr=0x12))], 0x12)
     self.assertTrue(math.isnan(rr.points[0].vRel))
-    self.assertFalse(rr.points[0].measured)
+    self.assertFalse(rr.points[0].deprecated.measured)
 
   # ---- S6 vRel derivation hardening -----------------------------------------------------------
   def test_s6_long_gap_reseeds_no_spike(self):
@@ -547,7 +547,7 @@ class TestCivicBoschFineSafeParity(unittest.TestCase):
     rng = 4000
     self._emit(0, [self._f(0x280, _hdr_frame(rng, cntr=0x10))], 0x10)
     rr = self._emit(1, [self._f(0x280, _hdr_frame(rng - 50, cntr=0x11))], 0x11)
-    self.assertTrue(all(math.isnan(p.aRel) for p in rr.points))  # aRel never fabricated (R2 deferred)
+    self.assertTrue(all(math.isnan(p.deprecated.aRel) for p in rr.points))  # aRel never fabricated (R2 deferred)
 
 
 @unittest.skipUnless(os.path.exists(BFCAR_CSV), "radar-re bfcar capture not present")

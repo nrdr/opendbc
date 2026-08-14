@@ -1,7 +1,7 @@
 import math
 from collections import deque
 import numpy as np
-from cereal import messaging
+from openpilot.cereal import messaging
 from openpilot.common.params import Params
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs

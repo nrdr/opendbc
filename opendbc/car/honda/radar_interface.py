@@ -502,7 +502,7 @@ class RadarInterface(RadarInterfaceBase):
       if slot not in self.pts:
         self.pts[slot] = structs.RadarData.RadarPoint()
         self.pts[slot].trackId = self._bosch_trackid(slot)
-        self.pts[slot].yvRel = float('nan')
+        self.pts[slot].deprecated.yvRel = float('nan')
 
       self.pts[slot].dRel = dRel
       # yRel = lateral projection of the polar (range, azimuth) measurement. b4:b5 is AZIMUTH ANGLE
@@ -515,12 +515,12 @@ class RadarInterface(RadarInterfaceBase):
       self.pts[slot].vRel = vRel
       # R1: pack the KF's smoothed range-accel into aRel (NaN until the filter is converged AND has a
       # rate history). RX-only telemetry; the radard-side consumer is K5 (deferred).
-      self.pts[slot].aRel = kf.a
+      self.pts[slot].deprecated.aRel = kf.a
       # S5 honest measured flag: vRel is a DERIVED estimate, so flag the point as an estimate (measured=
       # False) whenever vRel is not yet a valid derived value (first-sight/re-seed NaN). dRel/yRel are
       # real measurements, but the capnp measured bit is about point-as-measurement-vs-estimate, and our
       # headline kinematic (vRel) is derived -- True only once a stable derived vRel exists.
-      self.pts[slot].measured = not math.isnan(vRel)
+      self.pts[slot].deprecated.measured = not math.isnan(vRel)
 
     # D1: the emit window is consumed; the next window's frames are harvested fresh from vl_all.
     self._pending.clear()

@@ -478,8 +478,8 @@ def _write_learner_meta_atomic(car_fingerprint: str):
 #   The brake controller has k_p=0, so its output brake_addon == self.i (the integrator term),
 #   already in m/s^2 (it is summed straight into `control` and clamped to [-2.0, 0.0]).
 #   error_integral == self.i / k_i == self.i / 0.5 (units m/s^2 * s). We cache and preload the
-#   OUTPUT-unit integrator self.i directly, so "integrator units" == m/s^2 and the -0.5 cap is
-#   literally "never preload more brake than 0.5 m/s^2 of integrator": _PRELOAD_CAP = -0.5.
+#   OUTPUT-unit integrator self.i directly, so "integrator units" == m/s^2. The later road-tested
+#   brake-PID adjustment tightened the preload bound to 0.15 m/s^2: _PRELOAD_CAP = -0.15.
 # This is BOUNDED integrator state, never a learned multiplier; every cap is conservative
 # (no CMBS backstop on this car).
 # ---------------------------------------------------------------------------
