@@ -143,7 +143,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.lkas_state_change_frames = 0
     self.tja_control = CP.carFingerprint in HONDA_BOSCH_TJA_CONTROL
     self.param_writer = HondaParamWriter()
-    self.nrdr = HondaControllerFeatures(CP)
+    self.nrdr = HondaControllerFeatures(CP, CP_SP)
 
     self.braking = False
     self.brake_steady = 0.

@@ -36,6 +36,11 @@ def get_param_float(params, key, default, min_value=None, max_value=None, scale=
   return result
 
 
+def initialize_live_learning_gas(params, enable_gas_interceptor: bool) -> None:
+  if params.get("HondaLiveLearningGas", return_default=False) is None:
+    params.put_bool("HondaLiveLearningGas", not enable_gas_interceptor, block=True)
+
+
 def torque_lpf_tau(v_ego: float, low_tau: float, standard_tau: float, highway_tau: float) -> float:
   if v_ego < 25.0 * CV.MPH_TO_MS:
     return low_tau
@@ -47,8 +52,12 @@ def torque_lpf_tau(v_ego: float, low_tau: float, standard_tau: float, highway_ta
 class HondaControllerFeatures:
   replaces_longitudinal = True
 
-  def __init__(self, CP):
+  def __init__(self, CP, CP_SP):
+    from openpilot.common.params import Params
+
     self.CP = CP
+    self.CP_SP = CP_SP
+    initialize_live_learning_gas(Params(), CP_SP.enableGasInterceptor)
     self.params = get_honda_live_params()
     self.param_writer = HondaParamWriter()
     self._live_generation = -1
@@ -81,7 +90,7 @@ class HondaControllerFeatures:
         "override_fade_up_s": get_param_float(snapshot, "HondaOverrideFadeUpSecs", 0.1, 0.0, 10.0),
         "override_torque_scale": get_param_float(snapshot, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
         "driver_assist_during_override": get_param_bool(snapshot, "HondaDriverAssistDuringOverride", True),
-        "live_learning_gas": get_param_bool(snapshot, "HondaLiveLearningGas", self.CP.carFingerprint in HONDA_BOSCH),
+        "live_learning_gas": get_param_bool(snapshot, "HondaLiveLearningGas", not self.CP_SP.enableGasInterceptor),
         "torque_lpf_enabled": get_param_bool(snapshot, "HondaTorqueLowPassFilter", True),
         "lpf_tau_low": get_param_float(snapshot, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
         "lpf_tau_standard": get_param_float(snapshot, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
@@ -99,7 +108,7 @@ class HondaControllerFeatures:
         "sub_mode_until": get_param_float(snapshot, "NrdrHudSubModeUntil", 0.0, 0.0),
         "ecu_matched_long": get_param_bool(snapshot, "NrdrHondaEcuMatchedLong", False),
         "full_brake_authority": get_param_bool(snapshot, "NrdrHondaFullBrakeAuthority", True),
-        "roen_acceleration_limits": get_param_bool(snapshot, "NrdrRoenAccelerationLimits", False),
+        "roen_acceleration_limits": get_param_bool(snapshot, "NrdrRoenAccelerationLimits", True),
       }
       self._live_generation = snapshot.generation
     return self._live
