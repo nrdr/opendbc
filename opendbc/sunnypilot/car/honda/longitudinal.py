@@ -194,6 +194,13 @@ class HondaParamWriter:
     self._queue.put(({key: float(value) for key, value in values.items()}, car_fingerprint))
 
   def _run(self):
+    try:
+      from openpilot.common.realtime import drop_realtime, set_core_affinity
+      drop_realtime()
+      set_core_affinity(list(range(os.cpu_count() or 1)))
+    except (ImportError, OSError):
+      pass
+
     while True:
       pending, car_fingerprint = self._queue.get()
       try:
@@ -204,5 +211,5 @@ class HondaParamWriter:
         pass
 
       for key, value in pending.items():
-        self._params.put(key, value)
+        self._params.put(key, value, block=True)
       write_metadata(car_fingerprint)

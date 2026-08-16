@@ -2,18 +2,23 @@ import math
 import time
 
 import numpy as np
-from openpilot.common.params import Params
 
 from opendbc.car import DT_CTRL, rate_limit, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import HONDA_BOSCH
+from opendbc.sunnypilot.car.honda.live_params import get_honda_live_params
 from opendbc.sunnypilot.car.honda.longitudinal import HondaParamWriter, LongGasLearner, load_factors
 
 
 def get_param_bool(params, key, default=False):
-  if params.get(key) is None:
+  value = params.get(key)
+  if value is None:
     return default
-  return params.get_bool(key)
+  if isinstance(value, bytes):
+    return value.strip().lower() not in (b"", b"0", b"false")
+  if isinstance(value, str):
+    return value.strip().lower() not in ("", "0", "false")
+  return bool(value)
 
 
 def get_param_float(params, key, default, min_value=None, max_value=None, scale=1.0):
@@ -44,8 +49,10 @@ class HondaControllerFeatures:
 
   def __init__(self, CP):
     self.CP = CP
-    self.params = Params()
+    self.params = get_honda_live_params()
     self.param_writer = HondaParamWriter()
+    self._live_generation = -1
+    self._live = {}
 
     gas_factor, wind_factor = load_factors(CP.carFingerprint)
     self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint)
@@ -67,29 +74,35 @@ class HondaControllerFeatures:
     return self.learner.gasfactor, self.learner.windfactor
 
   def live_tuning(self):
-    return {
-      "override_fade_down_s": get_param_float(self.params, "HondaOverrideFadeDownSecs", 0.1, 0.0, 10.0),
-      "override_fade_up_s": get_param_float(self.params, "HondaOverrideFadeUpSecs", 0.1, 0.0, 10.0),
-      "override_torque_scale": get_param_float(self.params, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
-      "driver_assist_during_override": get_param_bool(self.params, "HondaDriverAssistDuringOverride", True),
-      "live_learning_gas": get_param_bool(self.params, "HondaLiveLearningGas", self.CP.carFingerprint in HONDA_BOSCH),
-      "torque_lpf_enabled": get_param_bool(self.params, "HondaTorqueLowPassFilter", True),
-      "lpf_tau_low": get_param_float(self.params, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
-      "lpf_tau_standard": get_param_float(self.params, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
-      "lpf_tau_highway": get_param_float(self.params, "HondaLpfTauHighway", 0.1, 0.0, 5.0),
-      "steer_delta_limiter_enabled": get_param_bool(self.params, "HondaSteerDeltaLimiter", False),
-      "steer_delta_up": get_param_float(self.params, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
-      "steer_delta_down": get_param_float(self.params, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
-      "stopping_decel_rate": get_param_float(self.params, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
-      "increase_override_tolerance": get_param_bool(self.params, "NrdrIncreaseOverrideTolerance", False),
-      "alt_dashboard_speed": int(get_param_float(self.params, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),
-      "alt_dashboard_distance": int(get_param_float(self.params, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),
-      "clear_dash_faults": get_param_bool(self.params, "NrdrClearDashFaults", True),
-      "spoof_camera_messages": get_param_bool(self.params, "HondaSpoofCameraMessages", False),
-      "sub_mode_enabled": get_param_bool(self.params, "NrdrCruiseButtonSubMode", False),
-      "sub_mode_until": get_param_float(self.params, "NrdrHudSubModeUntil", 0.0, 0.0),
-      "ecu_matched_long": get_param_bool(self.params, "NrdrHondaEcuMatchedLong", False),
-    }
+    snapshot = self.params.snapshot
+    if snapshot.generation != self._live_generation:
+      self._live = {
+        "override_fade_down_s": get_param_float(snapshot, "HondaOverrideFadeDownSecs", 0.1, 0.0, 10.0),
+        "override_fade_up_s": get_param_float(snapshot, "HondaOverrideFadeUpSecs", 0.1, 0.0, 10.0),
+        "override_torque_scale": get_param_float(snapshot, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
+        "driver_assist_during_override": get_param_bool(snapshot, "HondaDriverAssistDuringOverride", True),
+        "live_learning_gas": get_param_bool(snapshot, "HondaLiveLearningGas", self.CP.carFingerprint in HONDA_BOSCH),
+        "torque_lpf_enabled": get_param_bool(snapshot, "HondaTorqueLowPassFilter", True),
+        "lpf_tau_low": get_param_float(snapshot, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
+        "lpf_tau_standard": get_param_float(snapshot, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
+        "lpf_tau_highway": get_param_float(snapshot, "HondaLpfTauHighway", 0.1, 0.0, 5.0),
+        "steer_delta_limiter_enabled": get_param_bool(snapshot, "HondaSteerDeltaLimiter", False),
+        "steer_delta_up": get_param_float(snapshot, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
+        "steer_delta_down": get_param_float(snapshot, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),
+        "stopping_decel_rate": get_param_float(snapshot, "HondaStoppingDecelRate", 0.3, 0.0, 1.0, scale=100.0),
+        "increase_override_tolerance": get_param_bool(snapshot, "NrdrIncreaseOverrideTolerance", False),
+        "alt_dashboard_speed": int(get_param_float(snapshot, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),
+        "alt_dashboard_distance": int(get_param_float(snapshot, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),
+        "clear_dash_faults": get_param_bool(snapshot, "NrdrClearDashFaults", True),
+        "spoof_camera_messages": get_param_bool(snapshot, "HondaSpoofCameraMessages", False),
+        "sub_mode_enabled": get_param_bool(snapshot, "NrdrCruiseButtonSubMode", False),
+        "sub_mode_until": get_param_float(snapshot, "NrdrHudSubModeUntil", 0.0, 0.0),
+        "ecu_matched_long": get_param_bool(snapshot, "NrdrHondaEcuMatchedLong", False),
+        "full_brake_authority": get_param_bool(snapshot, "NrdrHondaFullBrakeAuthority", True),
+        "roen_acceleration_limits": get_param_bool(snapshot, "NrdrRoenAccelerationLimits", False),
+      }
+      self._live_generation = snapshot.generation
+    return self._live
 
   def update_system_speed_flash(self, CC, CS, hud_control):
     now = time.monotonic()
@@ -213,6 +226,17 @@ class HondaControllerFeatures:
     if sign:
       self.last_accel_sign = sign
     return gas, brake
+
+  def nidec_brake_authority(self, accel: float, brake: float, v_ego: float, enabled: bool) -> float:
+    if not enabled or self.CP.carFingerprint in HONDA_BOSCH:
+      return brake
+    creep_brake = np.interp(v_ego, [0.0, 2.3], [0.15, 0.0]) if v_ego < 2.3 else 0.0
+    return float(np.clip(-accel / 4.0 + creep_brake, 0.0, 1.0))
+
+  @staticmethod
+  def nidec_brake_command(brake: float, wind_brake: float, full_authority: bool) -> float:
+    wind_compensation = wind_brake if not full_authority or brake <= 0.95 else 0.0
+    return float(np.clip(brake - wind_compensation, 0.0, 1.0))
 
   def update_bosch_learner(self, CC, CS, actuators, accel: float, gas_pedal_force: float,
                            wind_brake: float, pitch: float, car_params, learning_enabled: bool):
