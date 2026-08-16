@@ -205,6 +205,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       ecu_matched = live["ecu_matched_long"] and self.CP.carFingerprint not in HONDA_BOSCH
       accel_cmd = self.nrdr.nidec_accel_command(actuators.accel, ecu_matched)
       gas, brake = compute_gas_brake(accel_cmd + hill_brake, CS.out.vEgo, self.CP.carFingerprint)
+      brake = self.nrdr.nidec_brake_authority(
+        accel_cmd + hill_brake, brake, CS.out.vEgo, live["full_brake_authority"],
+      )
       gas, brake = self.nrdr.nidec_gas_brake(accel_cmd, gas, brake, CS.out.vEgo, ecu_matched)
     else:
       accel = 0.0
@@ -429,7 +432,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, CC.enabled, CC.longActive, self.accel, self.gas,
                                                           self.stopping_counter, self.CP.carFingerprint, gas_pedal_force))
         else:
-          apply_brake = np.clip(self.brake_last - wind_brake, 0.0, 1.0)
+          apply_brake = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live["full_brake_authority"])
           apply_brake = int(np.clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
           pump_on, self.last_pump_ts = brake_pump_hysteresis(apply_brake, self.apply_brake_last, self.last_pump_ts, ts)
 
@@ -457,7 +460,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           learned_gas = self.nrdr.update_nidec_learner(CC, CS, actuators, gas, brake, wind_brake, self.pitch,
                                                        live["live_learning_gas"] and self.CP_SP.enableGasInterceptor)
           self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
-          can_sends.extend(GasInterceptorCarController.update(self, CC, CS, learned_gas, brake, wind_brake, self.packer, self.frame))
+          can_sends.extend(GasInterceptorCarController.update(
+            self, CC, CS, learned_gas, brake, wind_brake, self.packer, self.frame, live["roen_acceleration_limits"],
+          ))
 
     # Send dashboard UI commands. On CAN FD, ACC_HUD is a radar/ADAS look-alike that openpilot only
     # owns when it has disabled the radar (op longitudinal); in stock ACC the real system sends it and
