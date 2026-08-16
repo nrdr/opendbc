@@ -12,8 +12,8 @@ from opendbc.car import gen_empty_fingerprint
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.car_helpers import interfaces
-from opendbc.car.honda.interface import HONDA_TORQUE_MOD_PID_CARS
 from opendbc.car.honda.values import CAR
+from opendbc.sunnypilot.car.honda.interface_ext import TORQUE_MOD_PID_CARS
 
 CarFw = CarParams.CarFw
 
@@ -35,7 +35,7 @@ class TestHondaEpsMod(unittest.TestCase):
 
 class TestHondaPidTune(unittest.TestCase):
 
-  @parameterized("car_name", HONDA_TORQUE_MOD_PID_CARS)
+  @parameterized("car_name", TORQUE_MOD_PID_CARS)
   def test_torque_mod_four_breakpoint_pid_tune(self, car_name):
     fingerprint = gen_empty_fingerprint()
     CarInterface = interfaces[car_name]

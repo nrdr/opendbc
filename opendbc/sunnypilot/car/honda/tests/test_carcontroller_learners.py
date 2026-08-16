@@ -33,7 +33,7 @@ sys.modules.setdefault("openpilot.common", _op_common)
 sys.modules.setdefault("openpilot.common.params", _op_params)
 
 # Now import what we need from the production module
-from opendbc.car.honda.carcontroller import (  # noqa: E402
+from opendbc.sunnypilot.car.honda.longitudinal import (  # noqa: E402
   LongGasLearner,
   _LAG_TICKS,
   _LEARNER_DT,

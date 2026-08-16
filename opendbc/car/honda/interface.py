@@ -1,32 +1,20 @@
 #!/usr/bin/env python3
 import numpy as np
 from opendbc.car import get_safety_config, structs, uds
-from openpilot.common.params import Params, UnknownKeyName
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu, clear_all_dtcs, clear_ecu_dtcs
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.steer_ratio import get_honda_vgr_profile, HONDA_VGR_PROFILE_FLAGS
 from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HONDA_BOSCH, HONDA_BOSCH_CANFD, \
-                                                 HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HondaSafetyFlags, \
-                                                 RADAR_FW_0X280_INGEST
+                                                 HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HondaSafetyFlags
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
 
+from opendbc.sunnypilot.car.honda.interface_ext import configure_honda_platform, configure_modified_eps
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 
 TransmissionType = structs.CarParams.TransmissionType
-
-HONDA_TORQUE_MOD_PID_CARS = frozenset({
-  CAR.HONDA_ACCORD,
-  CAR.HONDA_CIVIC,
-  CAR.HONDA_CIVIC_BOSCH,
-  CAR.HONDA_CIVIC_BOSCH_DIESEL,
-  CAR.HONDA_CLARITY,
-  CAR.HONDA_CRV_5G,
-  CAR.HONDA_INSIGHT,
-})
 
 
 class CarInterface(CarInterfaceBase):
@@ -68,31 +56,6 @@ class CarInterface(CarInterfaceBase):
       ret.alphaLongitudinalAvailable = True
       ret.openpilotLongitudinalControl = alpha_long
       ret.pcmCruise = not ret.openpilotLongitudinalControl
-
-      # 0x280 fine-range radar ingest is GATED on the confirmed radar firmware (RADAR_FW_0X280_INGEST in
-      # values.py). Only that radar keeps streaming 0x280 objects under op-long, so only it is kept
-      # radar-live (radarUnavailable=False); any other Civic Bosch radar fw keeps the standard HONDA_BOSCH
-      # path above (radarUnavailable=True) as the safe default. alpha-long/op-long are standard for all
-      # Bosch (set above). Factory AEB does NOT stay live under op-long (accepted). Fail-safe: if car_fw
-      # is empty/unknown the radar stays off.
-      #
-      # "Try-out" toggle (HondaCivicRadarTryout): lets a user enable the 0x280 radar on a Civic Bosch whose
-      # radar fw is NOT in the verified fingerprint list, without hand-adding firmware strings. The 0x280
-      # fine-range decode is cross-car validated (R2~0.99 across Civic Bosch radars), so a try-out radar is
-      # treated IDENTICALLY to a fingerprint-matched one: radar-live, and usable by op-long when the user
-      # enables experimental/alpha longitudinal (op-long stays = alpha_long, same as a matched car).
-      # EXPERIMENTAL: the decode is reverse-engineered and not validated on every individual car — the user
-      # must confirm lead distance/closing-rate before relying on it for longitudinal control.
-      try:
-        _tryout_enabled = Params().get_bool("HondaCivicRadarTryout")
-      except UnknownKeyName:
-        # stale prebuilt params_pyx.so that predates the key -- fail safe: radar try-out off
-        _tryout_enabled = False
-      _radar_tryout = candidate == CAR.HONDA_CIVIC_BOSCH and not docs and _tryout_enabled
-      _radar_fw_match = candidate == CAR.HONDA_CIVIC_BOSCH and \
-        any(fw.ecu == structs.CarParams.Ecu.fwdRadar and RADAR_FW_0X280_INGEST in fw.fwVersion for fw in car_fw)
-      if _radar_fw_match or _radar_tryout:
-        ret.radarUnavailable = False
     else:
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hondaNidec)]
       ret.openpilotLongitudinalControl = True
@@ -142,12 +105,6 @@ class CarInterface(CarInterfaceBase):
       if fw.ecu == "eps" and b"," in fw.fwVersion:
         ret.dashcamOnly = True
 
-    # Select VGR only from the exact EPS image whose position table was traced.
-    # Unknown firmware deliberately retains the existing fingerprint behavior.
-    vgr_profile = get_honda_vgr_profile(car_fw)
-    if vgr_profile is not None:
-      ret.flags |= int(HONDA_VGR_PROFILE_FLAGS[vgr_profile])
-
     if candidate == CAR.HONDA_CIVIC:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 2560], [0, 2560]]
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[1.1], [0.33]]
@@ -187,6 +144,11 @@ class CarInterface(CarInterfaceBase):
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.8], [0.24]]
       ret.wheelSpeedFactor = 1.025
 
+    elif candidate == CAR.HONDA_CRV_5G:
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]
+      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.64], [0.192]]
+      ret.wheelSpeedFactor = 1.025
+
     elif candidate == CAR.HONDA_CRV_HYBRID:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.18]]
@@ -195,8 +157,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate in (CAR.HONDA_CRV_6G):
       ret.steerActuatorDelay = 0.15
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 5100], [0, 5100]]
-      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0, 10], [0.05, 0.5]]
-      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0, 10], [0.0125, 0.125]]
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       if (ret.flags & HondaFlags.HYBRID):
         CarControllerParams.BOSCH_GAS_LOOKUP_BP = [-0.3, 2.0]
 
@@ -227,7 +188,7 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate == CAR.ACURA_RDX_3G_MMR:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4076], [0, 4076]]
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.2], [0.06]]
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 2000]
       if not ret.openpilotLongitudinalControl:
         # When using stock ACC, the radar intercepts and filters steering commands the EPS would otherwise accept
@@ -277,8 +238,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.ACURA_MDX_4G:
       ret.steerActuatorDelay = 0.15
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 2560, 4209], [0, 2560, 9150]]
-      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0, 10], [0.05, 0.5]]
-      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0, 10], [0.0125, 0.125]]
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.ACURA_TLX_2G_MMR:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]
@@ -300,7 +260,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate in CAR.HONDA_FIT_4G:
       ret.steerActuatorDelay = 0.15
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.2], [0.05]]
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.ACURA_ADX:
       ret.steerActuatorDelay = 0.15
@@ -317,7 +277,7 @@ class CarInterface(CarInterfaceBase):
     else:
       ret.steerActuatorDelay = 0.15
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.8], [0.24]]
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     if candidate == CAR.HONDA_PILOT_4G:
       CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 2200]
@@ -345,7 +305,7 @@ class CarInterface(CarInterfaceBase):
     elif (ret.transmissionType == TransmissionType.manual) and (not ret.openpilotLongitudinalControl):
       ret.autoResumeSng = False
     else:
-      ret.autoResumeSng = candidate in (HONDA_BOSCH | {CAR.HONDA_CIVIC, CAR.HONDA_PILOT})
+      ret.autoResumeSng = candidate in (HONDA_BOSCH | {CAR.HONDA_CIVIC})
     if ret.autoResumeSng:
       ret.minEnableSpeed = -1.
     elif candidate == CAR.HONDA_ODYSSEY_TWN:
@@ -357,6 +317,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerLimitTimer = 0.8
     ret.radarDelay = 0.1
+    configure_honda_platform(ret, candidate, car_fw, docs)
 
     return ret
 
@@ -380,50 +341,21 @@ class CarInterface(CarInterfaceBase):
     if 0x35E in fingerprint[CAN.pt]:
       ret.flags |= HondaFlagsSP.HAS_CAMERA_MESSAGES.value
 
-    if candidate == CAR.HONDA_CLARITY:
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      _low_max = 25. * CV.MPH_TO_MS
-      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
-      stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
-      stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
-
-    elif candidate == CAR.HONDA_CIVIC:
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      _low_max = 25. * CV.MPH_TO_MS
-      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
-      stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
-      stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
+    if candidate == CAR.HONDA_CIVIC:
+      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+        # stock request input values:     0x0000, 0x00DE, 0x014D, 0x01EF, 0x0290, 0x0377, 0x0454, 0x0610, 0x06EE
+        # stock request output values:    0x0000, 0x0917, 0x0DC5, 0x1017, 0x119F, 0x140B, 0x1680, 0x1680, 0x1680
+        # modified request output values: 0x0000, 0x0917, 0x0DC5, 0x1017, 0x119F, 0x140B, 0x1680, 0x2880, 0x3180
+        # stock filter output values:     0x009F, 0x0108, 0x0108, 0x0108, 0x0108, 0x0108, 0x0108, 0x0108, 0x0108
+        # modified filter output values:  0x009F, 0x0108, 0x0108, 0x0108, 0x0108, 0x0108, 0x0108, 0x0400, 0x0480
+        # note: max request allowed is 4096, but request is capped at 3840 in firmware, so modifications result in 2x max
+        stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560, 8000], [0, 2560, 3840]]
+        stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
 
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
-      _low_max = 25. * CV.MPH_TO_MS
-      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
-      stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
-      stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
-
-    elif candidate in (CAR.HONDA_INSIGHT, CAR.HONDA_NBOX_2G):
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
-      _low_max = 25. * CV.MPH_TO_MS
-      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
-      stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
-      stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
-
-    elif candidate == CAR.HONDA_CRV_5G:
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
-      _low_max = 25. * CV.MPH_TO_MS
-      _bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kf = 3.6e-6  # scalar fallback; kfBP/kfV used when present
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]]
-      stock_cp.steerAtStandstill, stock_cp.autoResumeSng = True, True
-      stock_cp.minEnableSpeed, stock_cp.minSteerSpeed = -1.0, -1.0
+      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+        stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2564, 8000], [0, 2564, 3840]]
+        stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.09]]  # 2.5x Modded EPS
 
     elif candidate == CAR.HONDA_CIVIC_2022:
       if ret.flags & HondaFlagsSP.EPS_MODIFIED:
@@ -433,9 +365,30 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.HONDA_ACCORD:
       if ret.flags & HondaFlagsSP.EPS_MODIFIED:
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.09]]
-      # nrdr 07/26: FF halved at 25mph+ (upstream default kf 6.0e-5; low band kept)
-      _bp = [0., 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kfBP, stock_cp.lateralTuning.pid.kfV = [_bp, [6.0e-5, 3.0e-5, 3.0e-5]]
+
+    elif candidate == CAR.HONDA_CRV_5G:
+      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+        # stock request input values:     0x0000, 0x00DB, 0x01BB, 0x0296, 0x0377, 0x0454, 0x0532, 0x0610, 0x067F
+        # stock request output values:    0x0000, 0x0500, 0x0A15, 0x0E6D, 0x1100, 0x1200, 0x129A, 0x134D, 0x1400
+        # modified request output values: 0x0000, 0x0500, 0x0A15, 0x0E6D, 0x1100, 0x1200, 0x1ACD, 0x239A, 0x2800
+        stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560, 10000], [0, 2560, 3840]]
+        stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.21], [0.07]]
+
+    elif candidate == CAR.HONDA_CLARITY:
+      stock_cp.autoResumeSng = True
+      stock_cp.minEnableSpeed = -1
+      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+        for fw in car_fw:
+          if fw.ecu == "eps" and b"-" not in fw.fwVersion and b"," in fw.fwVersion:
+            stock_cp.lateralTuning.pid.kf = 0.00004
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 5760, 15360], [0, 2560, 3840]]
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.1575], [0.05175]]
+          elif fw.ecu == "eps" and b"-" in fw.fwVersion and b"," in fw.fwVersion:
+            stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 5760, 10240], [0, 2560, 3840]]
+            stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
+      else:
+        stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560], [0, 2560]]
+        stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.8], [0.24]]
 
     elif candidate in (CAR.ACURA_MDX_3G, CAR.ACURA_MDX_3G_MMR): # source mlocoteta
       stock_cp.autoResumeSng = True
@@ -448,25 +401,21 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.ACURA_TLX_1G:
       stock_cp.autoResumeSng = True
       stock_cp.minEnableSpeed = -1
+      # stock_cp.steerActuatorDelay = 0.3
+      # stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 830], [0, 830]]
+      # stock_cp.lateralTuning.pid.kf = 0.000035
+      # stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.115], [0.052]]
       stock_cp.steerActuatorDelay = 0.15
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 830], [0, 830]]
-      stock_cp.lateralTuning.pid.kf = 0.000035
-      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.115], [0.052]]
+      CarInterfaceBase.configure_torque_tune(candidate, stock_cp.lateralTuning)
 
     elif candidate == CAR.HONDA_ACCORD_9G:
       stock_cp.steerActuatorDelay = 0.3
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 239], [0, 239]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0., 20], [0., 20]]
-      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4, 0.3], [0, 0]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0.,20], [0.,20]]
+      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4,0.3], [0,0]]
 
-    if candidate in HONDA_TORQUE_MOD_PID_CARS:
-      # Shared tune for the supported Honda torque-mod platforms. Keep the
-      # low-speed tune through 25 mph, then step to the standard tune and ramp
-      # it to the 50+ mph values.
-      _low_max = 25. * CV.MPH_TO_MS
-      _pid_gain_bp = [0., _low_max - 1e-3, _low_max, 50. * CV.MPH_TO_MS]
-      stock_cp.lateralTuning.pid.kpBP, stock_cp.lateralTuning.pid.kpV = [_pid_gain_bp, [0.018, 0.024, 0.048, 0.060]]
-      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kiV = [_pid_gain_bp, [0.006, 0.008, 0.016, 0.020]]
+    configure_modified_eps(stock_cp, candidate)
 
     if candidate in HONDA_BOSCH:
       pass

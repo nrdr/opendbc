@@ -18,7 +18,6 @@ from numpy.linalg import solve
 
 from opendbc.car.structs import CarParams
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY
-from opendbc.car.steer_ratio_curve import SR_ANGLE_CURVES
 
 
 class VehicleModel:
@@ -37,9 +36,6 @@ class VehicleModel:
 
     self.cF_orig: float = CP.tireStiffnessFront
     self.cR_orig: float = CP.tireStiffnessRear
-    # nrdr: measured SR(|angle|) curve for VGR racks; None -> scalar behavior unchanged
-    self.sr_curve = SR_ANGLE_CURVES.get(str(CP.carFingerprint))
-    self.sr_trim: float = 1.0  # live global trim hook; fixed at 1.0 for now
     self.update_params(1.0, CP.steerRatio)
 
   def update_params(self, stiffness_factor: float, steer_ratio: float) -> None:
@@ -47,16 +43,6 @@ class VehicleModel:
     self.cF: float = stiffness_factor * self.cF_orig
     self.cR: float = stiffness_factor * self.cR_orig
     self.sR: float = steer_ratio
-
-  def steer_ratio_at(self, sa: float) -> float:
-    """Effective steer ratio at a steering wheel angle [rad].
-
-    Cars without a measured curve fall back to the scalar self.sR.
-    """
-    if self.sr_curve is None:
-      return self.sR
-    bp, v = self.sr_curve
-    return float(np.interp(abs(float(np.degrees(sa))), bp, v)) * self.sr_trim
 
   def steady_state_sol(self, sa: float, u: float, roll: float) -> np.ndarray:
     """Returns the steady state solution.
@@ -88,7 +74,7 @@ class VehicleModel:
     Returns:
       Curvature factor [1/m]
     """
-    return (self.curvature_factor(u) * sa / self.steer_ratio_at(sa)) + self.roll_compensation(roll, u)
+    return (self.curvature_factor(u) * sa / self.sR) + self.roll_compensation(roll, u)
 
   def curvature_factor(self, u: float) -> float:
     """Returns the curvature factor.
@@ -115,14 +101,7 @@ class VehicleModel:
       Steering wheel angle [rad]
     """
 
-    w = (curv - self.roll_compensation(roll, u)) / self.curvature_factor(u)
-    sa = w * self.sR
-    if self.sr_curve is not None:
-      # SR depends on the answer; fixed-point iteration (worst-case contraction ~0.3
-      # at the curve's steepest knot, so 6 steps -> <0.002 deg residual)
-      for _ in range(6):
-        sa = w * self.steer_ratio_at(sa)
-    return sa
+    return (curv - self.roll_compensation(roll, u)) * self.sR * 1.0 / self.curvature_factor(u)
 
   def roll_compensation(self, roll: float, u: float) -> float:
     """Calculates the roll-compensation to curvature
@@ -182,14 +161,13 @@ def kin_ss_sol(sa: float, u: float, VM: VehicleModel) -> np.ndarray:
   Returns:
     2x1 matrix with steady state solution
   """
-  sr = VM.steer_ratio_at(sa)
   K = np.zeros((2, 1))
-  K[0, 0] = VM.aR / sr / VM.l * u
-  K[1, 0] = 1. / sr / VM.l * u
+  K[0, 0] = VM.aR / VM.sR / VM.l * u
+  K[1, 0] = 1. / VM.sR / VM.l * u
   return K * sa
 
 
-def create_dyn_state_matrices(u: float, VM: VehicleModel, sr: float | None = None) -> tuple[np.ndarray, np.ndarray]:
+def create_dyn_state_matrices(u: float, VM: VehicleModel) -> tuple[np.ndarray, np.ndarray]:
   """Returns the A and B matrix for the dynamics system
 
   Args:
@@ -209,8 +187,6 @@ def create_dyn_state_matrices(u: float, VM: VehicleModel, sr: float | None = Non
     sR: Steering ratio [-]
     chi: Steer ratio rear [-]
   """
-  if sr is None:
-    sr = VM.sR
   A = np.zeros((2, 2))
   B = np.zeros((2, 2))
   A[0, 0] = - (VM.cF + VM.cR) / (VM.m * u)
@@ -219,8 +195,8 @@ def create_dyn_state_matrices(u: float, VM: VehicleModel, sr: float | None = Non
   A[1, 1] = - (VM.cF * VM.aF**2 + VM.cR * VM.aR**2) / (VM.j * u)
 
   # Steering input
-  B[0, 0] = (VM.cF + VM.chi * VM.cR) / VM.m / sr
-  B[1, 0] = (VM.cF * VM.aF - VM.chi * VM.cR * VM.aR) / VM.j / sr
+  B[0, 0] = (VM.cF + VM.chi * VM.cR) / VM.m / VM.sR
+  B[1, 0] = (VM.cF * VM.aF - VM.chi * VM.cR * VM.aR) / VM.j / VM.sR
 
   # Roll input
   B[0, 1] = -ACCELERATION_DUE_TO_GRAVITY
@@ -241,7 +217,7 @@ def dyn_ss_sol(sa: float, u: float, roll: float, VM: VehicleModel) -> np.ndarray
   Returns:
     2x1 matrix with steady state solution
   """
-  A, B = create_dyn_state_matrices(u, VM, VM.steer_ratio_at(sa))
+  A, B = create_dyn_state_matrices(u, VM)
   inp = np.array([[sa], [roll]])
   return -solve(A, B) @ inp
 

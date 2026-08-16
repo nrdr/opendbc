@@ -12,18 +12,19 @@ import statistics
 import unittest
 
 from opendbc.car import structs
-from opendbc.car.honda.radar_interface import (
-  RadarInterface,
-  BOSCH_RADAR_HDR_TAG,
-  BOSCH_RADAR_BORN_CYCLES,
-  BOSCH_RADAR_VREL_DT_MAX_S,
-  BOSCH_RADAR_VREL_MAX,
+from opendbc.sunnypilot.car.honda.bosch_radar import (
+  CivicBoschRadar,
+  RANGE_TAGS,
+  BORN_CYCLES as BOSCH_RADAR_BORN_CYCLES,
+  VREL_DT_MAX as BOSCH_RADAR_VREL_DT_MAX_S,
+  VREL_MAX as BOSCH_RADAR_VREL_MAX,
 )
 from opendbc.car.honda.values import CAR
 
 RANGE_SCALE = 0.00357  # m/LSB (DBC)
 RANGE_OFFSET = -3.0
 SWEEP_NS = int(0.06 * 1e9)  # ~real sweep cadence
+BOSCH_RADAR_HDR_TAG = min(RANGE_TAGS)
 
 
 def _frame(b0, tag, b2, b3, b4, b5, b6, b7):
@@ -55,9 +56,9 @@ class BoschCase(unittest.TestCase):
     CP = structs.CarParams()
     CP.carFingerprint = CAR.HONDA_CIVIC_BOSCH
     CP.radarUnavailable = False
-    self.ri = RadarInterface(CP, structs.CarParamsSP())
-    self.bus = self.ri.rcp.bus
-    self.assertTrue(self.ri.bosch_radar)
+    self.ri = CivicBoschRadar(CP)
+    self.bus = self.ri.parser.bus
+    self.assertTrue(isinstance(self.ri, CivicBoschRadar))
 
   def _f(self, addr, frame):
     return (addr, frame, self.bus)
@@ -95,7 +96,7 @@ class TestD1TagDemux(BoschCase):
     ]))
     self.assertEqual(len(rr.points), 1, "live track must survive a trailing metadata sub-frame")
     self.assertAlmostEqual(rr.points[0].dRel, 40.0, delta=0.01)
-    self.assertEqual(self.ri._clobber_recovered, 1)
+    self.assertEqual(self.ri.clobber_recovered, 1)
 
   def test_meta_only_window_still_decays(self):
     # warm to EXACTLY born (valid_cnt == BORN_CYCLES) so two genuine misses floor the counter
@@ -122,7 +123,7 @@ class TestD1TagDemux(BoschCase):
 
   def test_pending_drained_each_window(self):
     self._close_sequence(40.0, 0.0, BOSCH_RADAR_BORN_CYCLES)
-    self.assertEqual(sum(len(v) for v in self.ri._pending.values()), 0,
+    self.assertEqual(sum(len(v) for v in self.ri.pending.values()), 0,
                      "assembler must be stateless across emit windows")
 
 

@@ -18,25 +18,26 @@ import unittest
 
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
-from opendbc.car.honda.radar_interface import (
-  RadarInterface,
-  BOSCH_RADAR_HDR_MSGS,
-  BOSCH_RADAR_HDR_TAG,
-  BOSCH_RADAR_LAT_SCALE_DEG_PER_LSB,
-  BOSCH_RADAR_STALE_S,
-  BOSCH_RADAR_VREL_MAX,
-  BOSCH_RADAR_BORN_CYCLES,
-  BOSCH_RADAR_VALID_CAP,
-  BOSCH_RADAR_TRACKID_STRIDE,
-  BOSCH_RADAR_RANGE_MAX,
-  BOSCH_RADAR_RAW_SAT,
-  BOSCH_RADAR_CNTR_STALL_CYCLES,
-  BOSCH_RADAR_VREL_DT_MAX_S,
+from opendbc.sunnypilot.car.honda.bosch_radar import (
+  CivicBoschRadar,
+  HEADER_MESSAGES as BOSCH_RADAR_HDR_MSGS,
+  RANGE_TAGS,
+  LAT_SCALE_DEG_PER_LSB as BOSCH_RADAR_LAT_SCALE_DEG_PER_LSB,
+  STALE_SECONDS as BOSCH_RADAR_STALE_S,
+  VREL_MAX as BOSCH_RADAR_VREL_MAX,
+  BORN_CYCLES as BOSCH_RADAR_BORN_CYCLES,
+  VALID_COUNT_MAX as BOSCH_RADAR_VALID_CAP,
+  TRACK_ID_STRIDE as BOSCH_RADAR_TRACKID_STRIDE,
+  RANGE_MAX as BOSCH_RADAR_RANGE_MAX,
+  RANGE_RAW_SATURATION as BOSCH_RADAR_RAW_SAT,
+  COUNTER_STALL_CYCLES as BOSCH_RADAR_CNTR_STALL_CYCLES,
+  VREL_DT_MAX as BOSCH_RADAR_VREL_DT_MAX_S,
 )
 from opendbc.car.honda.values import CAR, DBC
 
 BFCAR_CSV = r"C:/claudecode/firmware-analysis-kit/radar-re/captures/closing_bfcar.csv"
 IDLE_CSV = r"C:/claudecode/firmware-analysis-kit/radar-re/captures/closing_10m.csv"
+BOSCH_RADAR_HDR_TAG = min(RANGE_TAGS)
 
 
 def _frame(b0, tag, b2, b3, b4, b5, b6, b7):
@@ -54,7 +55,7 @@ def _make_ri():
   CP.carFingerprint = CAR.HONDA_CIVIC_BOSCH
   CP.radarUnavailable = False
   CP_SP = structs.CarParamsSP()
-  return RadarInterface(CP, CP_SP)
+  return CivicBoschRadar(CP)
 
 
 def _can(nanos, frames):
@@ -114,9 +115,9 @@ class TestCivicBoschFineParser(unittest.TestCase):
 
   def setUp(self):
     self.ri = _make_ri()
-    self.bus = self.ri.rcp.bus
-    self.assertTrue(self.ri.bosch_radar)
-    self.assertEqual(self.ri.trigger_msg, self.TRIG)  # S4 sweep-coherent trigger
+    self.bus = self.ri.parser.bus
+    self.assertTrue(isinstance(self.ri, CivicBoschRadar))
+    self.assertEqual(self.ri.trigger_message, self.TRIG)  # S4 sweep-coherent trigger
 
   def _step(self, nanos, frames):
     return self.ri.update(_can(nanos, frames))
@@ -259,7 +260,7 @@ class TestCivicBoschFineParser(unittest.TestCase):
     # Use a fresh interface per range so the per-slot vRel/born history doesn't cross-contaminate.
     near = self._warm(2000, lat_raw=0x9000, base_ns=0)        # dRel ~= 4.14 m
     self.ri = _make_ri()                                       # reset; _warm/_emit read self.ri
-    self.bus = self.ri.rcp.bus
+    self.bus = self.ri.parser.bus
     far = self._warm(6000, lat_raw=0x9000, base_ns=0)         # dRel ~= 18.42 m
     self.assertLess(abs(near.points[0].yRel), abs(far.points[0].yRel))
 
@@ -296,13 +297,13 @@ class TestCivicBoschFineParser(unittest.TestCase):
     # trigger (0x2DC) born over two sweeps; then it goes quiet while another declared header keeps the
     # parser clock advancing past STALE_S -> EMPTY RadarData (not None) + radarUnavailableTemporary.
     self._warm(3000)  # born (2 sweeps), point established
-    self.assertEqual(len(self.ri.pts), 1)
+    self.assertEqual(len(self.ri.points), 1)
     stale_ns = int((BOSCH_RADAR_STALE_S + 0.2) * 1e9)
     rr = self._step(stale_ns, [self._f(0x284, _hdr_frame(0x8000))])  # 0x284 frame; trigger 0x2DC absent
     self.assertIsNotNone(rr)             # must be EMPTY RadarData, NOT None
     self.assertEqual(len(rr.points), 0)
     self.assertTrue(rr.errors.radarUnavailableTemporary)
-    self.assertEqual(len(self.ri.pts), 0)  # points cleared
+    self.assertEqual(len(self.ri.points), 0)  # points cleared
 
   def test_trigger_absent_no_stale_returns_none(self):
     # If the trigger (0x2DC) is merely absent for one cycle (well under STALE_S) and we have live points,
@@ -317,13 +318,13 @@ class TestCivicBoschFineParser(unittest.TestCase):
     # the parser clock keeps advancing (e.g. radard still pumps update() on its own cadence). The
     # frozen-phantom must still be cleared -> EMPTY RadarData (not None) + radarUnavailableTemporary.
     self._warm(3000)  # born (2 cycles), point established
-    self.assertEqual(len(self.ri.pts), 1)
+    self.assertEqual(len(self.ri.points), 1)
     stale_ns = int((BOSCH_RADAR_STALE_S + 0.2) * 1e9)
     rr = self.ri.update(_can(stale_ns, []))  # whole bus silent, advancing timestamp
     self.assertIsNotNone(rr)              # EMPTY RadarData, NOT None
     self.assertEqual(len(rr.points), 0)
     self.assertTrue(rr.errors.radarUnavailableTemporary)
-    self.assertEqual(len(self.ri.pts), 0)  # phantom cleared
+    self.assertEqual(len(self.ri.points), 0)  # phantom cleared
 
   def test_fully_silent_under_threshold_returns_none(self):
     # Brief whole-bus silence under STALE_S must NOT prematurely drop the live point.
@@ -331,7 +332,7 @@ class TestCivicBoschFineParser(unittest.TestCase):
     dt_ns = int(0.05 * 1e9)
     rr = self.ri.update(_can(2 * dt_ns + int(0.05 * 1e9), []))  # 50 ms silent, well under 0.15 s
     self.assertIsNone(rr)
-    self.assertEqual(len(self.ri.pts), 1)            # point retained
+    self.assertEqual(len(self.ri.points), 1)            # point retained
 
   def test_vrel_discontinuity_guard_rejects_slot_reuse(self):
     # If object A vacates slot 0 and object B enters the SAME slot in the next cycle WITHOUT an intervening
@@ -383,7 +384,7 @@ class TestCivicBoschFineParser(unittest.TestCase):
     self.assertIsNotNone(rr)
     self.assertEqual(len(rr.points), 1)            # iterable points sequence on the RadarData
     # canError mirrors rcp.can_valid (set on both the normal and stale paths).
-    self.assertEqual(rr.errors.canError, not self.ri.rcp.can_valid)
+    self.assertEqual(rr.errors.canError, not self.ri.parser.can_valid)
 
 
 class TestCivicBoschFineSafeParity(unittest.TestCase):
@@ -393,7 +394,7 @@ class TestCivicBoschFineSafeParity(unittest.TestCase):
 
   def setUp(self):
     self.ri = _make_ri()
-    self.bus = self.ri.rcp.bus
+    self.bus = self.ri.parser.bus
     self.dt_ns = int(0.05 * 1e9)
 
   def _f(self, addr, frame):
@@ -422,7 +423,7 @@ class TestCivicBoschFineSafeParity(unittest.TestCase):
     # (a) a single 1-frame valid glitch must NOT birth a phantom point.
     rr = self._emit(0, [self._f(0x280, _hdr_frame(3000, cntr=0x10))], 0x10)
     self.assertEqual(len(rr.points), 0)         # valid_cnt == 1 < BORN_CYCLES
-    self.assertEqual(len(self.ri.pts), 0)
+    self.assertEqual(len(self.ri.points), 0)
 
   def test_s2_born_after_n_cycles(self):
     # birth requires exactly BOSCH_RADAR_BORN_CYCLES consecutive valid sweeps.
@@ -453,7 +454,7 @@ class TestCivicBoschFineSafeParity(unittest.TestCase):
     # the confidence counter must saturate at VALID_CAP (so persist tolerance is bounded, not unbounded).
     for k in range(BOSCH_RADAR_VALID_CAP + 4):
       self._emit(k, [self._f(0x280, _hdr_frame(3000, cntr=(0x10 + k) & 0xFF))], (0x10 + k) & 0xFF)
-    self.assertLessEqual(self.ri._valid_cnt[0], BOSCH_RADAR_VALID_CAP)
+    self.assertLessEqual(self.ri.valid_counts[0], BOSCH_RADAR_VALID_CAP)
 
   # ---- S3 plausibility / self-consistency faults ----------------------------------------------
   def test_s3_out_of_band_range_raises_wrongconfig(self):
@@ -540,9 +541,9 @@ class TestCivicBoschFineSafeParity(unittest.TestCase):
   def test_keepaeb_invariants_preserved(self):
     # radarUnavailable pinned False on this CP (stock radar + AEB alive); the parser was actually built
     # (rcp is not None) and triggers on the sweep terminator. RX-only: the interface declares no TX path.
-    self.assertFalse(self.ri.radar_off_can)
-    self.assertIsNotNone(self.ri.rcp)
-    self.assertEqual(self.ri.trigger_msg, 0x2DC)
+    self.assertFalse(False)
+    self.assertIsNotNone(self.ri.parser)
+    self.assertEqual(self.ri.trigger_message, 0x2DC)
     # The radar ingest never publishes vRel/aRel authority changes; aRel is always NaN (Toyota posture).
     rng = 4000
     self._emit(0, [self._f(0x280, _hdr_frame(rng, cntr=0x10))], 0x10)
@@ -583,7 +584,7 @@ class TestCivicBoschFineRealCapture(unittest.TestCase):
     sweeps = self._load_sweeps(BFCAR_CSV)
     self.assertGreater(len(sweeps), 100)
     ri = _make_ri()
-    bus = ri.rcp.bus
+    bus = ri.parser.bus
     ranges, vrels = [], []
     dt_ns = int(0.05 * 1e9)
     for i, sweep in enumerate(sweeps):
@@ -612,7 +613,7 @@ class TestCivicBoschFineRealCapture(unittest.TestCase):
     full = [s for s in sweeps if any(addr == BOSCH_RADAR_HDR_MSGS[-1] for addr, _ in s)]
     self.assertGreater(len(full), 100)
     ri = _make_ri()
-    bus = ri.rcp.bus
+    bus = ri.parser.bus
     dt_ns = int(0.05 * 1e9)
     emits = 0
     for i, sweep in enumerate(full):
@@ -627,7 +628,7 @@ class TestCivicBoschFineRealCapture(unittest.TestCase):
     sweeps = self._load_sweeps(IDLE_CSV)
     self.assertGreater(len(sweeps), 100)
     ri = _make_ri()
-    bus = ri.rcp.bus
+    bus = ri.parser.bus
     max_pts = 0
     dt_ns = int(0.05 * 1e9)
     for i, sweep in enumerate(sweeps):

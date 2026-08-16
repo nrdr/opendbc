@@ -1,19 +1,18 @@
 import numpy as np
 from collections import defaultdict
 
-from openpilot.common.params import Params
-
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import CAR, DBC, STEER_THRESHOLD, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD, \
+from opendbc.car.honda.values import CAR, DBC, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD, \
                                                  HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_TJA_CONTROL, \
                                                  HondaFlags, CruiseButtons, CruiseSettings, GearShifter, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.honda.hud_objects import HudObjectTracker
 
 from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
+from opendbc.sunnypilot.car.honda.carstate import HondaCarStateFeatures
 
 TransmissionType = structs.CarParams.TransmissionType
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -29,7 +28,7 @@ class CarState(CarStateBase, CarStateExt):
     CarStateExt.__init__(self, CP, CP_SP)
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 
-    self.params = Params()
+    self.nrdr = HondaCarStateFeatures(CP)
 
     if CP.transmissionType != TransmissionType.manual:
       self.gearbox_msg = "GEARBOX_AUTO"
@@ -209,40 +208,7 @@ class CarState(CarStateBase, CarStateExt):
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
 
     ret.steeringTorque = cp.vl["STEER_STATUS"]["STEER_TORQUE_SENSOR"]
-    # STEER_THRESHOLD is the steeringPressed (driver override) detection point: the
-    # raw torque-sensor reading above which the driver is considered to be steering.
-    # Most Hondas use 1200; cars with different torque-sensor scales have overrides.
-    stock_threshold = STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
-    steer_threshold = stock_threshold
-    # Driver Override Threshold: user-tunable, 1200 = stock. On cars whose stock
-    # threshold is not 1200, the user value is applied proportionally so 1200 still
-    # means "stock" everywhere (e.g. slider 1800 on an ACURA_RDX -> 400 * 1.5 = 600).
-    try:
-      custom = self.params.get("NrdrDriverOverrideThreshold")
-      if custom is not None and int(custom) > 0:
-        steer_threshold = int(custom) if stock_threshold == 1200 else stock_threshold * int(custom) / 1200.0
-    except (TypeError, ValueError):
-      pass
-    # Override Threshold Center Boost: reuse the Center Boost degree band as a straight/curve
-    # detector. When the wheel is within that band (a straight) use a lower override threshold
-    # so the driver can override easily; outside it (a curve) keep the higher threshold so a
-    # mid-corner torque spike doesn't get misread as an override and drop steering.
-    try:
-      cb_deg = float(self.params.get("HondaCenterBoostThreshold"))
-      cb_custom = self.params.get("NrdrOverrideThresholdCenterBoost")
-      if cb_deg > 0.0 and cb_custom is not None and int(cb_custom) > 0 and abs(ret.steeringAngleDeg) <= cb_deg:
-        steer_threshold = int(cb_custom) if stock_threshold == 1200 else stock_threshold * int(cb_custom) / 1200.0
-    except (TypeError, ValueError):
-      pass
-    if self.params.get_bool("NrdrIncreaseOverrideTolerance") and self.CP.carFingerprint in (
-      CAR.HONDA_CLARITY,
-      CAR.HONDA_CIVIC,
-      CAR.HONDA_CIVIC_BOSCH,
-    ):
-      # Hysteresis headroom: doubles the (possibly user-set) threshold on platforms
-      # with sensitive EPS torque sensors to avoid false override detections.
-      steer_threshold *= 2
-    ret.steeringPressed = abs(ret.steeringTorque) > steer_threshold
+    ret.steeringPressed = self.nrdr.steering_pressed(ret.steeringTorque, ret.steeringAngleDeg)
 
     if self.CP.carFingerprint in HONDA_BOSCH:
       # The PCM always manages its own cruise control state, but doesn't publish it

@@ -25,13 +25,12 @@ import math
 import unittest
 
 from opendbc.car import structs
-from opendbc.car.honda.radar_interface import (
-  RadarInterface,
-  BOSCH_RADAR_HDR_MSGS,
-  BOSCH_RADAR_HDR_TAG,        # 0x74 -- kept for DBC decode asserts and backward compat
-  BOSCH_RADAR_HDR_TAG_SET,    # {0x74, 0x94} -- the allow-list
-  BOSCH_RADAR_BORN_CYCLES,
-  BOSCH_RADAR_TRACKID_STRIDE,
+from opendbc.sunnypilot.car.honda.bosch_radar import (
+  CivicBoschRadar,
+  HEADER_MESSAGES as BOSCH_RADAR_HDR_MSGS,
+  RANGE_TAGS as BOSCH_RADAR_HDR_TAG_SET,
+  BORN_CYCLES as BOSCH_RADAR_BORN_CYCLES,
+  TRACK_ID_STRIDE as BOSCH_RADAR_TRACKID_STRIDE,
 )
 from opendbc.car.honda.values import CAR
 
@@ -39,6 +38,7 @@ RANGE_SCALE = 0.00357    # m/LSB (DBC)
 RANGE_OFFSET = -3.0
 SWEEP_NS = int(0.05 * 1e9)
 TRIG = 0x2DC
+BOSCH_RADAR_HDR_TAG = min(BOSCH_RADAR_HDR_TAG_SET)
 
 
 # ---------------------------------------------------------------------------
@@ -72,9 +72,9 @@ class BoschCase(unittest.TestCase):
     CP = structs.CarParams()
     CP.carFingerprint = CAR.HONDA_CIVIC_BOSCH
     CP.radarUnavailable = False
-    self.ri = RadarInterface(CP, structs.CarParamsSP())
-    self.bus = self.ri.rcp.bus
-    self.assertTrue(self.ri.bosch_radar)
+    self.ri = CivicBoschRadar(CP)
+    self.bus = self.ri.parser.bus
+    self.assertTrue(isinstance(self.ri, CivicBoschRadar))
 
   def _f(self, addr, frame):
     return (addr, frame, self.bus)
@@ -214,8 +214,8 @@ class TestDemuxClassification(BoschCase):
 
   def _pending_rec(self, slot, frame_dicts):
     """Directly populate ri._pending for slot and call _bosch_assemble_record."""
-    self.ri._pending[slot] = frame_dicts
-    return self.ri._bosch_assemble_record(slot)
+    self.ri.pending[slot] = frame_dicts
+    return self.ri._assemble_record(slot)
 
   def test_d_0x94_lands_in_range_frame_not_meta(self):
     # (d) A 0x94 frame dict must be classified as range_frame, NOT stored in meta_frames.
@@ -288,8 +288,8 @@ class TestMixedWindow(BoschCase):
       self._raw_frame_dict(0x74, 10.0),  # first
       self._raw_frame_dict(0x94, 8.0),   # second (last wins)
     ]
-    self.ri._pending[0] = frames
-    rec = self.ri._bosch_assemble_record(0)
+    self.ri.pending[0] = frames
+    rec = self.ri._assemble_record(0)
     self.assertIsNotNone(rec.range_frame)
     self.assertAlmostEqual(rec.range_frame['RANGE'], 8.0, delta=0.05)
     self.assertEqual(int(rec.range_frame['TRACK_TAG']), 0x94)
@@ -303,8 +303,8 @@ class TestMixedWindow(BoschCase):
       self._raw_frame_dict(0x94, 8.0),   # first
       self._raw_frame_dict(0x74, 10.0),  # second (last wins)
     ]
-    self.ri._pending[0] = frames
-    rec = self.ri._bosch_assemble_record(0)
+    self.ri.pending[0] = frames
+    rec = self.ri._assemble_record(0)
     self.assertIsNotNone(rec.range_frame)
     self.assertAlmostEqual(rec.range_frame['RANGE'], 10.0, delta=0.05)
     self.assertEqual(int(rec.range_frame['TRACK_TAG']), 0x74)
@@ -317,8 +317,8 @@ class TestMixedWindow(BoschCase):
       self._raw_frame_dict(0x94, 8.0),
       {'TRACK_TAG': 0x75, 'STRENGTH': 0x10, 'RANGE_RAW': 0, 'RANGE': 0.0, 'LAT_RAW': 0.0, 'CNTR': 0x50},
     ]
-    self.ri._pending[0] = frames
-    rec = self.ri._bosch_assemble_record(0)
+    self.ri.pending[0] = frames
+    rec = self.ri._assemble_record(0)
     self.assertIsNotNone(rec.range_frame)  # range_frame was set before the meta landed
     self.assertTrue(rec.recovered_clobber, "trailing meta after range_frame must set recovered_clobber")
     self.assertIn(0x75, rec.meta_frames)
