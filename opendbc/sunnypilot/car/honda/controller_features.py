@@ -68,8 +68,8 @@ class HondaControllerFeatures:
 
   def live_tuning(self):
     return {
-      "override_fade_down_s": get_param_float(self.params, "HondaOverrideFadeDownSecs", 0.0, 0.0, 10.0),
-      "override_fade_up_s": get_param_float(self.params, "HondaOverrideFadeUpSecs", 1.5, 0.0, 10.0),
+      "override_fade_down_s": get_param_float(self.params, "HondaOverrideFadeDownSecs", 0.1, 0.0, 10.0),
+      "override_fade_up_s": get_param_float(self.params, "HondaOverrideFadeUpSecs", 0.1, 0.0, 10.0),
       "override_torque_scale": get_param_float(self.params, "HondaOverrideTorqueScale", 0.0, 0.0, 100.0, scale=100.0),
       "driver_assist_during_override": get_param_bool(self.params, "HondaDriverAssistDuringOverride", True),
       "live_learning_gas": get_param_bool(self.params, "HondaLiveLearningGas", self.CP.carFingerprint in HONDA_BOSCH),
@@ -84,7 +84,6 @@ class HondaControllerFeatures:
       "increase_override_tolerance": get_param_bool(self.params, "NrdrIncreaseOverrideTolerance", False),
       "alt_dashboard_speed": int(get_param_float(self.params, "HondaAltDashboardSpeed", 0.0, 0.0, 3.0)),
       "alt_dashboard_distance": int(get_param_float(self.params, "HondaAltDashboardDistance", 0.0, 0.0, 2.0)),
-      "min_steer_speed": get_param_float(self.params, "NrdrMinSteerSpeed", 0.0, 0.0, 45.0) * CV.MPH_TO_MS,
       "clear_dash_faults": get_param_bool(self.params, "NrdrClearDashFaults", True),
       "spoof_camera_messages": get_param_bool(self.params, "HondaSpoofCameraMessages", False),
       "sub_mode_enabled": get_param_bool(self.params, "NrdrCruiseButtonSubMode", False),
@@ -144,10 +143,6 @@ class HondaControllerFeatures:
 
   def update_steering_torque(self, CC, CS, live, previous_torque: float):
     torque_command = float(CC.actuators.torque) if CC.latActive else 0.0
-    below_minimum_speed = CS.out.vEgo < live["min_steer_speed"]
-    if below_minimum_speed:
-      torque_command = 0.0
-
     steering_pressed = False
     if CC.latActive:
       steering_pressed = (
@@ -192,7 +187,6 @@ class HondaControllerFeatures:
     lkas_active = (
       CC.latActive
       and (not live["driver_assist_during_override"] or not steering_pressed)
-      and not below_minimum_speed
     )
     return torque_command, lkas_active
 

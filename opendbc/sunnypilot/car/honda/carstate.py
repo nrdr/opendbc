@@ -10,26 +10,25 @@ class HondaCarStateFeatures:
 
   def steering_pressed(self, steering_torque: float, steering_angle: float) -> bool:
     stock_threshold = STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
-    threshold = self._scaled_threshold("NrdrDriverOverrideThreshold", stock_threshold)
+    threshold = self._scaled_threshold("NrdrDriverOverrideThreshold", stock_threshold, 1400)
 
     try:
       center_angle = float(self.params.get("HondaCenterBoostThreshold"))
     except (TypeError, ValueError):
       center_angle = 0.0
     if center_angle > 0.0 and abs(steering_angle) <= center_angle:
-      threshold = self._scaled_threshold("NrdrOverrideThresholdCenterBoost", stock_threshold, threshold)
+      threshold = self._scaled_threshold("NrdrOverrideThresholdCenterBoost", stock_threshold, 1000)
 
     sensitive_eps = self.CP.carFingerprint in (CAR.HONDA_CLARITY, CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH)
     if sensitive_eps and self.params.get_bool("NrdrIncreaseOverrideTolerance"):
       threshold *= 2
     return abs(steering_torque) > threshold
 
-  def _scaled_threshold(self, key: str, stock_threshold: float, default=None) -> float:
-    default = stock_threshold if default is None else default
+  def _scaled_threshold(self, key: str, stock_threshold: float, default: float) -> float:
     try:
       value = int(self.params.get(key))
     except (TypeError, ValueError):
-      return default
+      value = default
     if value <= 0:
-      return default
+      value = default
     return value if stock_threshold == 1200 else stock_threshold * value / 1200.0
