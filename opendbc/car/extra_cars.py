@@ -50,7 +50,6 @@ class CAR(Platforms):
       GMSecurityCarDocs("Acura ZDX 2024"),
       CommunityCarDocs("Honda Accord 2016-17", "Honda Sensing"),
       CommunityCarDocs("Honda Accord Hybrid 2017"),
-      CommunityCarDocs("Honda Clarity 2018-21"),
       CommunityCarDocs("Honda Pilot 2026"),
       GMSecurityCarDocs("Honda Prologue 2024-26"),
       CommunityCarDocs("Honda Ridgeline 2026"),
