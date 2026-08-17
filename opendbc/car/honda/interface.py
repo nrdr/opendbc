@@ -90,23 +90,21 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kiBP = [0., 5., 35.]
       ret.longitudinalTuning.kiV = [1.2, 0.8, 0.5]
 
-    eps_modified = False
-    eps_modified_3x = False
     for fw in car_fw:
-      if fw.ecu == "eps" and b"," in fw.fwVersion:
-        if candidate == CAR.HONDA_CLARITY:
-          eps_modified_3x |= b"-" not in fw.fwVersion
-          eps_modified |= b"-" in fw.fwVersion
-        else:
-          ret.dashcamOnly = True
+      if fw.ecu == "eps" and b"," in fw.fwVersion and candidate not in (CAR.HONDA_ACCORD, CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH,
+                                                                         CAR.HONDA_CIVIC_BOSCH_DIESEL, CAR.HONDA_CLARITY,
+                                                                         CAR.HONDA_CRV_5G, CAR.HONDA_INSIGHT):
+        ret.dashcamOnly = True
 
     if candidate == CAR.HONDA_CIVIC:
-      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 2560], [0, 2560]]
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[1.1], [0.33]]
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0., 11.175, 11.176, 22.352], [.018, .024, .048, .060]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0., 11.175, 11.176, 22.352], [.006, .008, .016, .020]]
 
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.8], [0.24]]
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0., 11.175, 11.176, 22.352], [.018, .024, .048, .060]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0., 11.175, 11.176, 22.352], [.006, .008, .016, .020]]
       if candidate == CAR.HONDA_CIVIC_BOSCH:
           CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 750]
 
@@ -117,7 +115,8 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate == CAR.HONDA_ACCORD:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.18]]
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0., 11.175, 11.176, 22.352], [.018, .024, .048, .060]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0., 11.175, 11.176, 22.352], [.006, .008, .016, .020]]
 
     elif candidate == CAR.ACURA_ILX:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]  # TODO: determine if there is a dead zone at the top end
@@ -129,8 +128,9 @@ class CarInterface(CarInterfaceBase):
       ret.wheelSpeedFactor = 1.025
 
     elif candidate == CAR.HONDA_CRV_5G:
-      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.64], [0.192]]
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0., 11.175, 11.176, 22.352], [.018, .024, .048, .060]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0., 11.175, 11.176, 22.352], [.006, .008, .016, .020]]
       ret.wheelSpeedFactor = 1.025
 
     elif candidate == CAR.HONDA_CRV_HYBRID:
@@ -178,7 +178,12 @@ class CarInterface(CarInterfaceBase):
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.38], [0.11]]
 
-    elif candidate in (CAR.HONDA_INSIGHT, CAR.HONDA_NBOX_2G):
+    elif candidate == CAR.HONDA_INSIGHT:
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0., 11.175, 11.176, 22.352], [.018, .024, .048, .060]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0., 11.175, 11.176, 22.352], [.006, .008, .016, .020]]
+
+    elif candidate == CAR.HONDA_NBOX_2G:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.18]]
 
@@ -204,15 +209,9 @@ class CarInterface(CarInterfaceBase):
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.HONDA_CLARITY:
-      if eps_modified:
-        ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 0xA00, 0x2800], [0, 2560, 3840]]
-        ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.3], [0.1]]
-      elif eps_modified_3x:
-        ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 0xA00, 0x3C00], [0, 2560, 3840]]
-        ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.1575], [0.05175]]
-      else:
-        ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 2560], [0, 2560]]
-        ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.8], [0.24]]
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0., 11.175, 11.176, 22.352], [.018, .024, .048, .060]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0., 11.175, 11.176, 22.352], [.006, .008, .016, .020]]
 
     else:
       ret.steerActuatorDelay = 0.15
