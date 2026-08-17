@@ -2,6 +2,7 @@ import numpy as np
 
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, rate_limit, make_tester_present_msg, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda import hondacan
 from opendbc.car.honda.values import CAR, CruiseButtons, HondaFlags, CarControllerParams
 from opendbc.car.interfaces import CarControllerBase
@@ -107,6 +108,8 @@ class CarController(CarControllerBase):
     self.gas = 0.0
     self.brake = 0.0
     self.last_torque = 0.0
+    self.linear_torque = CP.carFingerprint in (CAR.HONDA_ACCORD, CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL,
+                                               CAR.HONDA_CLARITY, CAR.HONDA_CRV_5G, CAR.HONDA_INSIGHT)
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
@@ -121,9 +124,13 @@ class CarController(CarControllerBase):
       accel = 0.0
       gas, brake = 0.0, 0.0
 
-    # *** rate limit steer ***
-    limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
-                                self.params.STEER_DELTA_UP * DT_CTRL)
+    # *** filter steer ***
+    if self.linear_torque:
+      alpha = DT_CTRL / ((.01 if CS.out.vEgo >= 50. * CV.MPH_TO_MS else .1) + DT_CTRL)
+      limited_torque = self.last_torque + alpha * (actuators.torque - self.last_torque) if CC.latActive else 0.
+    else:
+      limited_torque = rate_limit(actuators.torque, self.last_torque, -self.params.STEER_DELTA_DOWN * DT_CTRL,
+                                  self.params.STEER_DELTA_UP * DT_CTRL)
     self.last_torque = limited_torque
 
     # *** apply brake hysteresis ***
