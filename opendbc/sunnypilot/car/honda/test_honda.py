@@ -12,8 +12,9 @@ from opendbc.car import gen_empty_fingerprint
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.car_helpers import interfaces
-from opendbc.car.honda.values import CAR
+from opendbc.car.honda.values import CAR, HONDA_GAS_INTERCEPTOR_THRESHOLD_512
 from opendbc.sunnypilot.car.honda.interface_ext import TORQUE_MOD_PID_CARS
+from opendbc.sunnypilot.car.honda.values_ext import HondaSafetyFlagsSP
 
 CarFw = CarParams.CarFw
 
@@ -31,6 +32,22 @@ class TestHondaEpsMod(unittest.TestCase):
     _ = CarInterface.get_params_sp(CP, car_name, fingerprint, car_fw, False, False, False)
 
     self.assertFalse(CP.dashcamOnly)
+
+
+class TestHondaGasInterceptor(unittest.TestCase):
+
+  @parameterized("car_name", [*HONDA_GAS_INTERCEPTOR_THRESHOLD_512, CAR.HONDA_CLARITY])
+  def test_vehicle_threshold_is_forwarded_to_panda_safety(self, car_name):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[0][0x201] = 6
+    CarInterface = interfaces[car_name]
+    CP = CarInterface.get_params(car_name, fingerprint, [], False, False, False)
+    CP_SP = CarInterface.get_params_sp(CP, car_name, fingerprint, [], False, False, False)
+
+    self.assertTrue(CP_SP.enableGasInterceptor)
+    self.assertTrue(CP_SP.safetyParam & HondaSafetyFlagsSP.GAS_INTERCEPTOR)
+    self.assertEqual(bool(CP_SP.safetyParam & HondaSafetyFlagsSP.GAS_INTERCEPTOR_THRESHOLD_512),
+                     car_name in HONDA_GAS_INTERCEPTOR_THRESHOLD_512)
 
 
 class TestHondaPidTune(unittest.TestCase):

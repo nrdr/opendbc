@@ -94,7 +94,7 @@ class HondaControllerFeatures:
         "torque_lpf_enabled": get_param_bool(snapshot, "HondaTorqueLowPassFilter", True),
         "lpf_tau_low": get_param_float(snapshot, "HondaLpfTauLowSpeed", 0.1, 0.0, 5.0),
         "lpf_tau_standard": get_param_float(snapshot, "HondaLpfTauStandard", 0.1, 0.0, 5.0),
-        "lpf_tau_highway": get_param_float(snapshot, "HondaLpfTauHighway", 0.1, 0.0, 5.0),
+        "lpf_tau_highway": get_param_float(snapshot, "HondaLpfTauHighway", 0.05, 0.0, 5.0),
         "steer_delta_limiter_enabled": get_param_bool(snapshot, "HondaSteerDeltaLimiter", False),
         "steer_delta_up": get_param_float(snapshot, "HondaSteerDeltaUp", 3.0, 0.0, 100.0),
         "steer_delta_down": get_param_float(snapshot, "HondaSteerDeltaDown", 3.0, 0.0, 100.0),

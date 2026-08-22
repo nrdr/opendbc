@@ -47,6 +47,7 @@ static bool honda_bosch_radarless = false;
 static bool honda_bosch_canfd = false;
 static bool honda_nidec_hybrid = false;
 static bool honda_stock_longitudinal = false;
+static bool honda_gas_interceptor_threshold_512 = false;
 // counts down on each stock SCM_BUTTONS rx, topped up on each OP SCM_BUTTONS tx to the camera:
 // the stock buttons are only blocked from forwarding while OP's replacement stream is actually flowing
 static int honda_op_buttons_fresh = 0;
@@ -189,8 +190,8 @@ static void honda_rx_hook(const CANPacket_t *msg) {
   if (msg->addr == 0x201U) {
     // panda interceptor threshold needs to be equivalent to openpilot threshold to avoid controls mismatches
     // If thresholds are mismatched then it is possible for panda to see the gas fall and rise while openpilot is in the pre-enabled state
-    // Threshold calculated from DBC gains: round(((83.3 / 0.253984064) + (83.3 / 0.126992032)) / 2) = 492
-    const int honda_gas_interceptor_thrsld = 492;
+    // 492 is calculated from the DBC gains; noisy Pilot/Odyssey/Ridgeline pedals use the host-provided 512 threshold flag.
+    const int honda_gas_interceptor_thrsld = honda_gas_interceptor_threshold_512 ? 512 : 492;
 
     int gas_interceptor = HONDA_GET_INTERCEPTOR(msg);
     gas_pressed = gas_interceptor > honda_gas_interceptor_thrsld;
@@ -399,6 +400,7 @@ static safety_config honda_nidec_init(uint16_t param) {
   const uint16_t HONDA_PARAM_SP_NIDEC_HYBRID = 1;
   const uint16_t HONDA_PARAM_GAS_INTERCEPTOR = 2;
   const uint16_t HONDA_PARAM_STOCK_LONGITUDINAL = 4;
+  const uint16_t HONDA_PARAM_GAS_INTERCEPTOR_THRESHOLD_512 = 8;
 
   honda_hw = HONDA_NIDEC;
   honda_brake = 0;
@@ -409,6 +411,7 @@ static safety_config honda_nidec_init(uint16_t param) {
   honda_bosch_radarless = false;
   honda_bosch_canfd = false;
   honda_op_buttons_fresh = 0;
+  honda_gas_interceptor_threshold_512 = false;
 
   safety_config ret;
 
@@ -417,6 +420,7 @@ static safety_config honda_nidec_init(uint16_t param) {
   honda_nidec_hybrid = GET_FLAG(current_safety_param_sp, HONDA_PARAM_SP_NIDEC_HYBRID);
   enable_gas_interceptor = GET_FLAG(current_safety_param_sp, HONDA_PARAM_GAS_INTERCEPTOR);
   honda_stock_longitudinal = GET_FLAG(current_safety_param_sp, HONDA_PARAM_STOCK_LONGITUDINAL);
+  honda_gas_interceptor_threshold_512 = GET_FLAG(current_safety_param_sp, HONDA_PARAM_GAS_INTERCEPTOR_THRESHOLD_512);
 
   if (enable_nidec_alt) {
     // For Nidecs with main on signal on an alternate msg (missing 0x326)
@@ -532,6 +536,7 @@ static safety_config honda_bosch_init(uint16_t param) {
   // Checking for alternate brake override from safety parameter
   honda_alt_brake_msg = GET_FLAG(param, HONDA_PARAM_ALT_BRAKE);
   honda_stock_longitudinal = false;
+  honda_gas_interceptor_threshold_512 = false;
 
   // radar disabled so allow gas/brakes
 #ifdef ALLOW_DEBUG

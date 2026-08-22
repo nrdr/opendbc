@@ -1,5 +1,8 @@
 from threading import Event, get_ident
+from types import SimpleNamespace
 
+from opendbc.car.common.conversions import Conversions as CV
+from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures, torque_lpf_tau
 from opendbc.sunnypilot.car.honda.live_params import FAST_PARAM_GROUP, HondaLiveParams, PARAM_GROUPS, REFRESH_PERIOD
 
 
@@ -31,6 +34,26 @@ def test_groups_cover_each_key_once():
     "NrdrDriverOverrideThreshold", "HondaCenterBoostThreshold", "NrdrOverrideThresholdCenterBoost",
     "NrdrIncreaseOverrideTolerance",
   }
+
+
+def test_lpf_tau_uses_highway_band_at_50_mph_without_changing_lower_bands():
+  assert torque_lpf_tau(24.99 * CV.MPH_TO_MS, 0.1, 0.2, 0.05) == 0.1
+  assert torque_lpf_tau(25.0 * CV.MPH_TO_MS, 0.1, 0.2, 0.05) == 0.2
+  assert torque_lpf_tau(49.99 * CV.MPH_TO_MS, 0.1, 0.2, 0.05) == 0.2
+  assert torque_lpf_tau(50.0 * CV.MPH_TO_MS, 0.1, 0.2, 0.05) == 0.05
+
+
+def test_lpf_live_tuning_falls_back_to_highway_default():
+  features = HondaControllerFeatures.__new__(HondaControllerFeatures)
+  features.params = SimpleNamespace(snapshot=SimpleNamespace(generation=1, get=lambda _key: None))
+  features.CP_SP = SimpleNamespace(enableGasInterceptor=False)
+  features._live_generation = -1
+  features._live = {}
+
+  live = features.live_tuning()
+  assert live["lpf_tau_low"] == 0.1
+  assert live["lpf_tau_standard"] == 0.1
+  assert live["lpf_tau_highway"] == 0.05
 
 
 def test_group_refresh_is_atomic_and_staggered():

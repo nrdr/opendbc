@@ -401,6 +401,17 @@ class TestHondaNidecGasInterceptorSafety(GasInterceptorSafetyTest, HondaButtonEn
     self.safety.set_safety_hooks(CarParams.SafetyModel.hondaNidec, 0)
     self.safety.init_tests()
 
+  def test_vehicle_specific_interceptor_threshold(self):
+    self.safety.set_current_safety_param_sp(HondaSafetyFlagsSP.GAS_INTERCEPTOR |
+                                            HondaSafetyFlagsSP.GAS_INTERCEPTOR_THRESHOLD_512)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hondaNidec, 0)
+    self.safety.init_tests()
+
+    for gas, pressed in ((492, False), (493, False), (512, False), (513, True)):
+      self.safety.set_controls_allowed(True)
+      self._rx(self._interceptor_user_gas(gas))
+      self.assertEqual(not pressed, self.safety.get_longitudinal_allowed())
+
 
 class TestHondaNidecPcmAltSafety(TestHondaNidecPcmSafety):
   """

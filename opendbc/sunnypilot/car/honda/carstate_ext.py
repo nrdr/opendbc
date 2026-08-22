@@ -8,7 +8,8 @@ from enum import StrEnum
 
 from opendbc.car import Bus, structs
 from opendbc.can.parser import CANParser
-from opendbc.car.honda.values import (HONDA_BOSCH, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_CANFD, GearShifter)
+from opendbc.car.honda.values import (HONDA_BOSCH, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_CANFD,
+                                     HONDA_GAS_INTERCEPTOR_THRESHOLD_512, GearShifter)
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.car.common.conversions import Conversions as CV
 
@@ -39,7 +40,8 @@ class CarStateExt:
     if self.CP_SP.enableGasInterceptor:
       # Match panda's interceptor threshold.
       gas = (cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS"] + cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS2"]) // 2
-      ret.gasPressed = gas > 492
+      threshold = 512 if self.CP.carFingerprint in HONDA_GAS_INTERCEPTOR_THRESHOLD_512 else 492
+      ret.gasPressed = gas > threshold
     if ret.gearShifter == GearShifter.brake:
       ret.brakePressed = True
 
