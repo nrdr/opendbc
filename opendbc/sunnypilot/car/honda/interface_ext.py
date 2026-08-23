@@ -1,4 +1,3 @@
-from openpilot.common.params import Params, UnknownKeyName
 from opendbc.car import structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import CAR
@@ -29,22 +28,6 @@ _PID_BP = [0.0, _LOW_SPEED - 1e-3, _LOW_SPEED, 50.0 * CV.MPH_TO_MS]
 _KP = [0.018, 0.024, 0.048, 0.060]
 _KI = [0.006, 0.008, 0.016, 0.020]
 _KF = [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]
-_RADAR_FW = b"36802-TBA-A160"
-
-
-def _use_civic_bosch_radar(candidate, car_fw, docs: bool) -> bool:
-  if candidate != CAR.HONDA_CIVIC_BOSCH:
-    return False
-  if any(fw.ecu == structs.CarParams.Ecu.fwdRadar and _RADAR_FW in fw.fwVersion for fw in car_fw):
-    return True
-  if docs:
-    return False
-  try:
-    return Params().get_bool("HondaCivicRadarTryout")
-  except UnknownKeyName:
-    return False
-
-
 def _restore_pid_tune(cp: structs.CarParams, candidate) -> None:
   if cp.lateralTuning.which() != "torque":
     return
@@ -68,10 +51,6 @@ def configure_honda_platform(cp: structs.CarParams, candidate, car_fw, docs: boo
   elif candidate == CAR.HONDA_PILOT:
     cp.autoResumeSng = True
     cp.minEnableSpeed = -1.0
-
-  if _use_civic_bosch_radar(candidate, car_fw, docs):
-    cp.radarUnavailable = False
-
 
 def configure_modified_eps(cp: structs.CarParams, candidate) -> None:
   if candidate in _EXTENDED_TORQUE_LIMITS:

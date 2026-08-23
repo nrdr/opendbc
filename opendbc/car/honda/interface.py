@@ -4,18 +4,32 @@ from opendbc.car import get_safety_config, structs, uds
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu, clear_all_dtcs, clear_ecu_dtcs
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS,
+from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_A, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS,
                                       HONDA_GAS_INTERCEPTOR_THRESHOLD_512, HONDA_NIDEC_ALT_SCM_MESSAGES,
                                       CarControllerParams, HondaFlags, HondaSafetyFlags)
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
+from openpilot.common.params import Params, UnknownKeyName
 
 from opendbc.sunnypilot.car.honda.interface_ext import configure_honda_platform, configure_modified_eps
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 
 TransmissionType = structs.CarParams.TransmissionType
+
+
+def _use_bosch_a_radar(candidate, docs: bool) -> bool:
+  # TODO: remove this toggle+param once the 16-slot Bosch-A decoder (see radar_interface.py) has been
+  # field-validated across all HONDA_BOSCH_A platforms, then make radarUnavailable unconditional here.
+  if candidate not in HONDA_BOSCH_A:
+    return False
+  if docs:
+    return False
+  try:
+    return Params().get_bool("HondaBoschARadar")
+  except UnknownKeyName:
+    return False
 
 
 class CarInterface(CarInterfaceBase):
@@ -56,6 +70,10 @@ class CarInterface(CarInterfaceBase):
       # If Bosch radarless, this blocks ACC messages from the camera
       ret.alphaLongitudinalAvailable = True
       ret.openpilotLongitudinalControl = alpha_long
+      # The Bosch-A object decoder consumes the stock radar stream. Keep it available only with
+      # stock longitudinal; openpilot longitudinal must silence that ECU to avoid competing ACC.
+      if _use_bosch_a_radar(candidate, docs) and not ret.openpilotLongitudinalControl:
+        ret.radarUnavailable = False
       ret.pcmCruise = not ret.openpilotLongitudinalControl
     else:
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hondaNidec)]
