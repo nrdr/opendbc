@@ -8,7 +8,8 @@ from enum import StrEnum
 
 from opendbc.car import Bus, structs
 from opendbc.can.parser import CANParser
-from opendbc.car.honda.values import (HONDA_BOSCH, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_CANFD, GearShifter)
+from opendbc.car.honda.values import (HONDA_BOSCH, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_CANFD,
+                                     HONDA_GAS_INTERCEPTOR_THRESHOLD_512, GearShifter)
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.car.common.conversions import Conversions as CV
 
@@ -30,16 +31,19 @@ class CarStateExt:
     if self.CP_SP.flags & HondaFlagsSP.NIDEC_HYBRID:
       ret.accFaulted = bool(cp.vl["HYBRID_BRAKE_ERROR"]["BRAKE_ERROR_1"] or cp.vl["HYBRID_BRAKE_ERROR"]["BRAKE_ERROR_2"])
       ret.stockAeb = bool(cp_cam.vl["BRAKE_COMMAND"]["AEB_REQ_1"] and cp_cam.vl["BRAKE_COMMAND"]["COMPUTER_BRAKE_HYBRID"] > 1e-5)
-      ret.blockPcmEnable = ret.brakeHoldActive # Nidec Hybrids fault if resuming cruise from brake hold
+      ret.blockPcmEnable = ret.brakeHoldActive  # Nidec hybrids fault if cruise resumes from brake hold.
 
     if self.CP_SP.flags & HondaFlagsSP.HYBRID_ALT_BRAKEHOLD:
       ret.brakeHoldActive = cp.vl["BRAKE_HOLD_HYBRID_ALT"]["BRAKE_HOLD_ACTIVE"] == 1
       ret.blockPcmEnable = ret.brakeHoldActive and not self.CP_SP.enableGasInterceptor
 
     if self.CP_SP.enableGasInterceptor:
-      # Same threshold as panda, equivalent to 1e-5 with previous DBC scaling
+      # Match panda's interceptor threshold.
       gas = (cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS"] + cp.vl["GAS_SENSOR"]["INTERCEPTOR_GAS2"]) // 2
-      ret.gasPressed = gas > 492
-
+      threshold = 512 if self.CP.carFingerprint in HONDA_GAS_INTERCEPTOR_THRESHOLD_512 else 492
+      ret.gasPressed = gas > threshold
     if ret.gearShifter == GearShifter.brake:
-      ret.brakePressed = True # allows MADS in B (regen braking) mode
+      ret.brakePressed = True
+
+    if self.CP_SP.enableGasInterceptor:
+      ret_sp.gasInterceptorState = int(cp.vl["GAS_SENSOR"]["STATE"])

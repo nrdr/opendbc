@@ -42,8 +42,9 @@ FW_VERSIONS_EXT = {
     ],
     (Ecu.eps, 0x18da30f1, None): [
       b'39990-TRW-A020\x00\x00',
-      b'39990-TRW,A020\x00\x00',  # modified firmware
-      b'39990,TRW,A020\x00\x00',  # extra modified firmware
+      # Modified firmware reports either delimiter form.
+      b'39990-TRW,A020\x00\x00',
+      b'39990,TRW,A020\x00\x00',
     ],
     (Ecu.srs, 0x18da53f1, None): [
       b'77959-TRW-A210\x00\x00',
@@ -75,23 +76,23 @@ FW_VERSIONS_EXT = {
   CAR.ACURA_MDX_3G: {
     (Ecu.vsa, 0x18da28f1, None): [
       b'57114-TRX-H130\x00\x00',
-      b'57114-TYS-A910\x00\x00', # unknown
-      b'57114-TZ6-A810\x00\x00', # unknown
+      b'57114-TYS-A910\x00\x00',
+      b'57114-TZ6-A810\x00\x00',
       b'57114-TZ6-A910\x00\x00',
     ],
     (Ecu.fwdRadar, 0x18dab0f1, None): [
-      b'36161-TYS-A020\x00\x00', # unknown
-      b'36161-TZ6-A340\x00\x00', # unknown
-      b'36161-TZ6-A640\x00\x00', # unknown
+      b'36161-TYS-A020\x00\x00',
+      b'36161-TZ6-A340\x00\x00',
+      b'36161-TZ6-A640\x00\x00',
       b'36161-TZ6-A730\x00\x00',
       b'36161-TRX-A820\x00\x00',
     ],
     (Ecu.shiftByWire, 0x18da0bf1, None): [
       b'54008-TRX-A710\x00\x00',
-      b'54008-TZ5-A710\x00\x00', # unknown
+      b'54008-TZ5-A710\x00\x00',
       b'54008-TZ5-A911\x00\x00',
       b'54008-TZ5-A910\x00\x00',
-      b'77959-TZ5-A110\x00\x00', # unknown
+      b'77959-TZ5-A110\x00\x00',
     ],
     (Ecu.srs, 0x18da53f1, None): [
       b'77959-TRX-A011\x00\x00',
@@ -99,17 +100,17 @@ FW_VERSIONS_EXT = {
       b'77959-TZ5-A220\x00\x00',
     ],
     (Ecu.gateway, 0x18daeff1, None): [
-      b'38897-TYR-A011\x00\x00', # unknown
-      b'38897-TZ5-A110\x00\x00', # unknown
+      b'38897-TYR-A011\x00\x00',
+      b'38897-TZ5-A110\x00\x00',
       b'38897-TRX-A220\x00\x00',
     ],
     (Ecu.transmission, 0x18da1ef1, None): [
-      b'28101-5DH-A400\x00\x00', # unknown
-      b'28101-5DH-A401\x00\x00', # unknown
+      b'28101-5DH-A400\x00\x00',
+      b'28101-5DH-A401\x00\x00',
       b'28101-5NC-A310\x00\x00',
       b'28101-5NC-A770\x00\x00',
-      b'28101-5NC-A740\x00\x00', # unknown
-      b'28103-5NC-B210\x00\x00', # unknown
+      b'28101-5NC-A740\x00\x00',
+      b'28103-5NC-B210\x00\x00',
     ],
   },
   CAR.ACURA_MDX_3G_MMR: {

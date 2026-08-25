@@ -4,12 +4,15 @@ from opendbc.car import get_safety_config, structs, uds
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu, clear_all_dtcs, clear_ecu_dtcs
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HondaSafetyFlags, HONDA_BOSCH, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS
+from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS,
+                                      HONDA_GAS_INTERCEPTOR_THRESHOLD_512, HONDA_NIDEC_ALT_SCM_MESSAGES,
+                                      CarControllerParams, HondaFlags, HondaSafetyFlags)
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
 
+from opendbc.sunnypilot.car.honda.interface_ext import configure_honda_platform, configure_modified_eps
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 
 TransmissionType = structs.CarParams.TransmissionType
@@ -315,6 +318,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerLimitTimer = 0.8
     ret.radarDelay = 0.1
+    configure_honda_platform(ret, candidate, car_fw, docs)
 
     return ret
 
@@ -412,6 +416,8 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0.,20], [0.,20]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4,0.3], [0,0]]
 
+    configure_modified_eps(stock_cp, candidate)
+
     if candidate in HONDA_BOSCH:
       pass
     else:
@@ -420,6 +426,8 @@ class CarInterface(CarInterfaceBase):
 
     if ret.enableGasInterceptor and candidate not in HONDA_BOSCH:
       ret.safetyParam |= HondaSafetyFlagsSP.GAS_INTERCEPTOR
+      if candidate in HONDA_GAS_INTERCEPTOR_THRESHOLD_512:
+        ret.safetyParam |= HondaSafetyFlagsSP.GAS_INTERCEPTOR_THRESHOLD_512
 
     stock_cp.autoResumeSng = stock_cp.autoResumeSng or ret.enableGasInterceptor
     stock_cp.minEnableSpeed = -1. if ret.enableGasInterceptor else stock_cp.minEnableSpeed
@@ -462,4 +470,4 @@ class CarInterface(CarInterfaceBase):
   def deinit(CP, can_recv, can_send):
     communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
                                    uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT])
-    CarInterface.init(CP, can_recv, can_send, communication_control)
+    CarInterface.init(CP, None, can_recv, can_send, communication_control)

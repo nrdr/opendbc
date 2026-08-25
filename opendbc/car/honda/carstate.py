@@ -5,12 +5,14 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import CAR, DBC, STEER_THRESHOLD, HondaFlags, CruiseButtons, CruiseSettings, \
-                                                 GearShifter, CarControllerParams
+from opendbc.car.honda.values import (CAR, DBC, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD,
+                                      HONDA_BOSCH_RADARLESS, HONDA_BOSCH_TJA_CONTROL, HONDA_NIDEC_ALT_SCM_MESSAGES,
+                                      CarControllerParams, CruiseButtons, CruiseSettings, GearShifter, HondaFlags)
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.honda.hud_objects import HudObjectTracker
 
 from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
+from opendbc.sunnypilot.car.honda.carstate import HondaCarStateFeatures
 
 TransmissionType = structs.CarParams.TransmissionType
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -25,6 +27,8 @@ class CarState(CarStateBase, CarStateExt):
     CarStateBase.__init__(self, CP, CP_SP)
     CarStateExt.__init__(self, CP, CP_SP)
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
+
+    self.nrdr = HondaCarStateFeatures(CP)
 
     if CP.transmissionType != TransmissionType.manual:
       self.gearbox_msg = "GEARBOX_AUTO"
@@ -203,7 +207,7 @@ class CarState(CarStateBase, CarStateExt):
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
 
     ret.steeringTorque = cp.vl["STEER_STATUS"]["STEER_TORQUE_SENSOR"]
-    ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD.get(self.CP.carFingerprint, 1200)
+    ret.steeringPressed = self.nrdr.steering_pressed(ret.steeringTorque, ret.steeringAngleDeg)
 
     if self.CP.flags & HondaFlags.BOSCH:
       # The PCM always manages its own cruise control state, but doesn't publish it

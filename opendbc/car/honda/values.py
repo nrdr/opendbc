@@ -38,7 +38,7 @@ class CarControllerParams:
   STEER_STEP = 1  # 100 Hz
   STEER_DELTA_UP = 3  # min/max in 0.33s for all Honda
   STEER_DELTA_DOWN = 3
-  STEER_GLOBAL_MIN_SPEED = 3 * CV.MPH_TO_MS
+  STEER_GLOBAL_MIN_SPEED = 0 * CV.MPH_TO_MS
 
   def __init__(self, CP):
     self.STEER_MAX = CP.lateralParams.torqueBP[-1]
@@ -199,7 +199,7 @@ class CAR(Platforms):
       HondaCarDocs("Honda Civic Hatchback 2019-21", "All", min_steer_speed=12. * CV.MPH_TO_MS),
     ],
     CarSpecs(mass=1326, wheelbase=2.7, steerRatio=15.38, centerToFrontRatio=0.4),  # steerRatio: 10.93 is end-to-end spec
-    {Bus.pt: 'honda_civic_hatchback_ex_2017_can_generated'},
+    {Bus.pt: 'honda_civic_hatchback_ex_2017_can_generated', Bus.radar: 'honda_civic_bosch_radar'},
   )
   HONDA_CIVIC_BOSCH_DIESEL = HondaBoschPlatformConfig(
     [],  # don't show in docs
@@ -482,13 +482,17 @@ class CAR(Platforms):
     flags=HondaFlags.NIDEC_ALT_SCM_MESSAGES | HondaFlags.HAS_ALL_DOOR_STATES,
   )
 
-
 DBC = CAR.create_dbc_map()
 
+HONDA_NIDEC_ALT_PCM_ACCEL = frozenset(c for c in CAR if c.config.flags & HondaFlags.NIDEC_ALT_PCM_ACCEL)
+HONDA_NIDEC_ALT_SCM_MESSAGES = frozenset(c for c in CAR if c.config.flags & HondaFlags.NIDEC_ALT_SCM_MESSAGES)
 HONDA_BOSCH = frozenset(c for c in CAR if c.config.flags & HondaFlags.BOSCH)
 HONDA_BOSCH_ALT_RADAR = frozenset(c for c in CAR if c.config.flags & HondaFlags.BOSCH_ALT_RADAR)
 HONDA_BOSCH_RADARLESS = frozenset(c for c in CAR if c.config.flags & HondaFlags.BOSCH_RADARLESS)
 HONDA_BOSCH_CANFD = frozenset(c for c in CAR if c.config.flags & HondaFlags.BOSCH_CANFD)
+HONDA_BOSCH_TJA_CONTROL = frozenset(c for c in CAR if c.config.flags & HondaFlags.BOSCH_TJA_CONTROL)
+HONDA_LKAS_MINSPEED_CUTOFF = frozenset(c for c in CAR if c.config.flags & HondaFlags.LKAS_MINSPEED_CUTOFF)
+HONDA_GAS_INTERCEPTOR_THRESHOLD_512 = frozenset((CAR.HONDA_ODYSSEY, CAR.HONDA_PILOT, CAR.HONDA_RIDGELINE))
 
 
 STEER_THRESHOLD = {

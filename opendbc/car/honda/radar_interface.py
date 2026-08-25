@@ -3,6 +3,7 @@ from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.honda.values import DBC
+from opendbc.sunnypilot.car.honda.bosch_radar import CivicBoschRadar, is_civic_bosch_radar
 
 
 def _create_nidec_can_parser(car_fingerprint):
@@ -17,9 +18,10 @@ class RadarInterface(RadarInterfaceBase):
     self.radar_fault = False
     self.radar_wrong_config = False
     self.radar_off_can = CP.radarUnavailable
+    self.nrdr_radar = CivicBoschRadar(CP) if is_civic_bosch_radar(CP) else None
 
     # Nidec
-    if self.radar_off_can:
+    if self.radar_off_can or self.nrdr_radar is not None:
       self.rcp = None
     else:
       self.rcp = _create_nidec_can_parser(CP.carFingerprint)
@@ -27,6 +29,9 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_messages = set()
 
   def update(self, can_strings):
+    if self.nrdr_radar is not None:
+      return self.nrdr_radar.update(can_strings)
+
     # in Bosch radar and we are only steering for now, so sleep 0.05s to keep
     # radard at 20Hz and return no points
     if self.radar_off_can:

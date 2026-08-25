@@ -12,6 +12,10 @@ from opendbc.car.can_definitions import CanData
 from opendbc.sunnypilot.car import create_gas_interceptor_command
 
 
+def gas_multiplier(v_ego: float, roen_acceleration_limits: bool) -> float:
+  return 1.0 if roen_acceleration_limits else float(np.interp(v_ego, [0.0, 10.0], [0.4, 1.0]))
+
+
 class GasInterceptorCarController:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
     self.CP = CP
@@ -21,16 +25,12 @@ class GasInterceptorCarController:
     self.interceptor_gas_cmd = 0.
 
   def update(self, CC: structs.CarControl, CS: structs.CarState, gas: float, brake: float, wind_brake: float,
-             packer, frame: int) -> list[CanData]:
+             packer, frame: int, roen_acceleration_limits: bool = False) -> list[CanData]:
     can_sends = []
 
     if self.CP_SP.enableGasInterceptor:
-      # way too aggressive at low speed without this
-      gas_mult = np.interp(CS.out.vEgo, [0., 10.], [0.4, 1.0])
-      # send exactly zero if apply_gas is zero. Interceptor will send the max between read value and apply_gas.
-      # This prevents unexpected pedal range rescaling
-      # Sending non-zero gas when OP is not enabled will cause the PCM not to respond to throttle as expected
-      # when you do enable.
+      # Taper low-speed gas and send an exact zero while longitudinal control is inactive.
+      gas_mult = gas_multiplier(CS.out.vEgo, roen_acceleration_limits)
       if CC.longActive:
         self.gas = float(np.clip(gas_mult * (gas - brake + wind_brake * 3 / 4), 0., 1.))
       else:

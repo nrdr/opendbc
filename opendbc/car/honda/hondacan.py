@@ -1,6 +1,8 @@
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.values import (CAR, HondaFlags, HONDA_BOSCH_ALT_RADAR, CarControllerParams)
+from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD,
+                                      HONDA_BOSCH_RADARLESS, CarControllerParams, HondaFlags)
+from opendbc.sunnypilot.car.honda.can import apply_brake_alert_policy, is_braking, update_acc_hud_values
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 # CAN bus layout with relay
@@ -46,7 +48,7 @@ class CanBus(CanBusBase):
     return self.offset
 
 
-def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_cancel_cmd, fcw, stock_brake, CP_SP):
+def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_cancel_cmd, fcw, stock_brake, CP_SP, clear_dash_faults=True):
   # TODO: do we loose pressure if we keep pump off for long?
   brakelights = apply_brake > 0
   brake_rq = apply_brake > 0
@@ -65,6 +67,7 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
     "AEB_REQ_2": 0,
     "AEB_STATUS": 0,
   }
+  apply_brake_alert_policy(values, fcw, stock_brake, clear_dash_faults)
 
   if CP_SP.flags & HondaFlagsSP.NIDEC_HYBRID:
     values["COMPUTER_BRAKE_HYBRID"] = apply_brake
@@ -83,7 +86,7 @@ def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_count
   control_on = 5 if enabled else 0
   gas_command = gas if active and gas_force > min_gas_accel else -30000
   accel_command = accel if active else 0
-  braking = 1 if active and gas_force < min_gas_accel else 0
+  braking = int(is_braking(active, accel))
   standstill = 1 if active and stopping_counter > 0 else 0
   standstill_release = 1 if active and stopping_counter == 0 else 0
 
@@ -144,7 +147,7 @@ def create_bosch_supplemental_1(packer, CAN):
 
 
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
-                   alphalong):
+                   alphalong, nrdr_options=None):
   acc_hud_values = {
     'CRUISE_SPEED': hud_v_cruise,
     'ENABLE_MINI_CAR': 1 if enabled else 0,
@@ -174,6 +177,8 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
     acc_hud_values['FCM_PROBLEM'] = acc_hud['FCM_PROBLEM']
     acc_hud_values['ICONS'] = acc_hud['ICONS']
 
+  acc_hud_values = update_acc_hud_values(acc_hud_values, CP, enabled, pcm_speed, pcm_accel, hud_control,
+                                          hud_v_cruise, acc_hud, speed_control, nrdr_options)
   return packer.make_can_msg("ACC_HUD", bus, acc_hud_values)
 
 

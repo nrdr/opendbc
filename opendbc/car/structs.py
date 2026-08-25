@@ -166,3 +166,4 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
+  gasInterceptorState: int = auto_field()
