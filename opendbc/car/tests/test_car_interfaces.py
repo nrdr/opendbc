@@ -53,6 +53,8 @@ def _make_car_test(car_name):
     assert car_params.maxLateralAccel > 0
 
     # Longitudinal sanity checks
+    assert len(car_params.longitudinalTuning.deprecated.kpV) > 0
+    assert len(car_params.longitudinalTuning.deprecated.kpV) == len(car_params.longitudinalTuning.deprecated.kpBP)
     assert len(car_params.longitudinalTuning.kiV) == len(car_params.longitudinalTuning.kiBP)
 
     # If we're using the interceptor for gasPressed, we should be commanding gas with it
