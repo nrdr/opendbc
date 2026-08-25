@@ -31,7 +31,9 @@ from opendbc.car.honda.radar_interface import (
   _bosch_a_range_ratio,
   _bosch_a_range_ratio_vrel,
 )
-from opendbc.car.honda.values import CAR, HONDA_BOSCH_A
+from opendbc.car.honda.values import CAR, HONDA_BOSCH_A, HondaSafetyFlags
+from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
+from opendbc.sunnypilot.car.interfaces import _initialize_honda
 from openpilot.common.params import Params
 
 # Tester toggle: CP is computed once at import time below (many helpers in this module close over
@@ -1150,3 +1152,25 @@ def test_bosch_a_gate_respects_param_and_longitudinal_mode(car, radar_enabled, a
 
   assert cp.openpilotLongitudinalControl is alpha_long
   assert cp.radarUnavailable is radar_unavailable
+
+
+@pytest.mark.parametrize("radar_enabled", (False, True))
+def test_force_stock_recomputes_bosch_longitudinal_and_radar_state(radar_enabled):
+  cp = CarInterface.get_params(CAR.HONDA_CIVIC_BOSCH, gen_empty_fingerprint(), [], True, False, False)
+  cp_sp = structs.CarParamsSP()
+  assert cp.openpilotLongitudinalControl is True
+  assert cp.pcmCruise is False
+  assert cp.radarUnavailable is True
+  assert cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_LONG.value
+
+  _initialize_honda(cp, cp_sp, {
+    "HondaEnforceStockLongitudinal": "1",
+    "HondaBoschARadar": str(int(radar_enabled)),
+  })
+
+  assert cp.openpilotLongitudinalControl is False
+  assert cp.pcmCruise is True
+  assert cp.radarUnavailable is not radar_enabled
+  assert not (cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_LONG.value)
+  assert cp_sp.flags & HondaFlagsSP.STOCK_LONGITUDINAL.value
+  assert cp_sp.safetyParam & HondaSafetyFlagsSP.STOCK_LONGITUDINAL

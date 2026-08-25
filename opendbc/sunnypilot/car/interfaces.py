@@ -12,6 +12,7 @@ from collections.abc import Callable
 
 from opendbc.car import structs
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
+from opendbc.car.honda.values import HONDA_BOSCH_A, HondaFlags, HondaSafetyFlags
 from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.subaru.values import SubaruFlags
 from opendbc.car.toyota.values import ToyotaSafetyFlags
@@ -158,11 +159,20 @@ def _initialize_stop_and_go(CP: structs.CarParams, CP_SP: structs.CarParamsSP, p
 def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params_dict: dict[str, str]) -> None:
   if CP.brand == 'honda':
     honda_stock_long = int(params_dict.get("HondaEnforceStockLongitudinal", 0)) == 1
+    bosch_a_radar = int(params_dict.get("HondaBoschARadar", 0)) == 1
 
     if honda_stock_long:
       CP.openpilotLongitudinalControl = False
+      CP.pcmCruise = True
       CP_SP.flags |= HondaFlagsSP.STOCK_LONGITUDINAL.value
       CP_SP.safetyParam |= HondaSafetyFlagsSP.STOCK_LONGITUDINAL
+
+      # Honda's base interface derives these fields before Sunny's force-stock override runs.
+      # Recompute the dependent Bosch state so CarInterface.init() keeps the stock radar alive and
+      # panda is not configured for openpilot longitudinal while controls believe stock ACC is active.
+      if CP.flags & HondaFlags.BOSCH:
+        CP.safetyConfigs[-1].safetyParam &= ~HondaSafetyFlags.BOSCH_LONG.value
+        CP.radarUnavailable = not (CP.carFingerprint in HONDA_BOSCH_A and bosch_a_radar)
 
 
 def _initialize_toyota(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params_dict: dict[str, str]) -> None:
