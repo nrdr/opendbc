@@ -33,12 +33,14 @@ def _restore_pid_tune(cp: structs.CarParams, candidate) -> None:
     return
 
   cp.lateralTuning.init("pid")
+  cp.lateralTuning.pid.kpBP = [0.0]
+  cp.lateralTuning.pid.kiBP = [0.0]
   if candidate in (CAR.HONDA_CRV_6G, CAR.ACURA_MDX_4G):
     cp.lateralTuning.pid.kpBP, cp.lateralTuning.pid.kpV = [[0, 10], [0.05, 0.5]]
     cp.lateralTuning.pid.kiBP, cp.lateralTuning.pid.kiV = [[0, 10], [0.0125, 0.125]]
   elif candidate == CAR.ACURA_RDX_3G_MMR:
     cp.lateralTuning.pid.kpV, cp.lateralTuning.pid.kiV = [[0.2], [0.06]]
-  elif candidate in CAR.HONDA_FIT_4G:
+  elif candidate == CAR.HONDA_FIT_4G:
     cp.lateralTuning.pid.kpV, cp.lateralTuning.pid.kiV = [[0.2], [0.05]]
   else:
     cp.lateralTuning.pid.kpV, cp.lateralTuning.pid.kiV = [[0.8], [0.24]]
