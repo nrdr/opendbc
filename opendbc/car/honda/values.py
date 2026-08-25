@@ -161,8 +161,8 @@ def radar_dbc_dict(pt_dict):
 
 def bosch_a_radar_dbc_dict(pt_dict, extra=None):
   # Bus.radar = the hand-written 16-slot Bosch-A object bank DBC (see radar_interface.py for the
-  # decode). The parser is RX-only and is enabled only with stock longitudinal; openpilot
-  # longitudinal silences the radar ECU and keeps this object feed unavailable.
+  # decode). The parser is RX-only; its camera-side object feed remains available with either stock
+  # Honda longitudinal or openpilot longitudinal control.
   return {Bus.pt: pt_dict, Bus.radar: 'honda_bosch_a_radar', **(extra or {})}
 
 

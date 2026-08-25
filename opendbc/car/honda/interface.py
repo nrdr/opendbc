@@ -70,9 +70,10 @@ class CarInterface(CarInterfaceBase):
       # If Bosch radarless, this blocks ACC messages from the camera
       ret.alphaLongitudinalAvailable = True
       ret.openpilotLongitudinalControl = alpha_long
-      # The Bosch-A object decoder consumes the stock radar stream. Keep it available only with
-      # stock longitudinal; openpilot longitudinal must silence that ECU to avoid competing ACC.
-      if _use_bosch_a_radar(candidate, docs) and not ret.openpilotLongitudinalControl:
+      # Bosch-A object frames remain available on the camera-side ACC-CAN while openpilot
+      # longitudinal silences the radar's stock ACC commands. Keep the receive-only decoder
+      # independent of the selected longitudinal mode, as in the original Bosch-A radar PR.
+      if _use_bosch_a_radar(candidate, docs):
         ret.radarUnavailable = False
       ret.pcmCruise = not ret.openpilotLongitudinalControl
     else:

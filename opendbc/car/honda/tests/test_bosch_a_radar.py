@@ -1139,9 +1139,9 @@ def test_bosch_a_gate_stays_closed_for_non_bosch_a_platforms(car):
 @pytest.mark.parametrize("car", _OPEN_BOSCH_A_CARS)
 @pytest.mark.parametrize(
   ("radar_enabled", "alpha_long", "radar_unavailable"),
-  ((False, False, True), (False, True, True), (True, False, False), (True, True, True)),
+  ((False, False, True), (False, True, True), (True, False, False), (True, True, False)),
 )
-def test_bosch_a_gate_respects_param_and_longitudinal_mode(car, radar_enabled, alpha_long, radar_unavailable):
+def test_bosch_a_gate_is_independent_of_longitudinal_mode(car, radar_enabled, alpha_long, radar_unavailable):
   params = Params()
   params.put_bool("HondaBoschARadar", radar_enabled, block=True)
   try:
@@ -1152,20 +1152,30 @@ def test_bosch_a_gate_respects_param_and_longitudinal_mode(car, radar_enabled, a
 
   assert cp.openpilotLongitudinalControl is alpha_long
   assert cp.radarUnavailable is radar_unavailable
+  assert bool(cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_LONG.value) is alpha_long
+
+  ri = CarInterface.RadarInterface(cp, structs.CarParamsSP())
+  assert ri.bosch_a_radar is radar_enabled
+  assert (ri.rcp is not None) is radar_enabled
 
 
 @pytest.mark.parametrize("radar_enabled", (False, True))
-def test_force_stock_recomputes_bosch_longitudinal_and_radar_state(radar_enabled):
-  cp = CarInterface.get_params(CAR.HONDA_CIVIC_BOSCH, gen_empty_fingerprint(), [], True, False, False)
+def test_force_stock_preserves_bosch_radar_param_state(radar_enabled):
+  params = Params()
+  params.put_bool("HondaBoschARadar", radar_enabled, block=True)
+  try:
+    cp = CarInterface.get_params(CAR.HONDA_CIVIC_BOSCH, gen_empty_fingerprint(), [], True, False, False)
+  finally:
+    params.put_bool("HondaBoschARadar", True, block=True)
+
   cp_sp = structs.CarParamsSP()
   assert cp.openpilotLongitudinalControl is True
   assert cp.pcmCruise is False
-  assert cp.radarUnavailable is True
+  assert cp.radarUnavailable is not radar_enabled
   assert cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_LONG.value
 
   _initialize_honda(cp, cp_sp, {
     "HondaEnforceStockLongitudinal": "1",
-    "HondaBoschARadar": str(int(radar_enabled)),
   })
 
   assert cp.openpilotLongitudinalControl is False
