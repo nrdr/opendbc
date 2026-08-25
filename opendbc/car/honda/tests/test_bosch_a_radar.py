@@ -40,7 +40,7 @@ from openpilot.common.params import Params
 # it), which runs before any pytest fixture could -- so this has to be plain top-level code, not a
 # fixture. teardown_module() restores it once every test in this file has run (mirrors
 # gm/tests/test_gm.py's put_bool/finally pattern for params-gated _get_params behavior).
-Params().put_bool("HondaBoschARadar", True)
+Params().put_bool("HondaBoschARadar", True, block=True)
 
 
 def teardown_module(module):
@@ -1143,12 +1143,12 @@ def test_bosch_a_gate_stays_closed_for_non_bosch_a_platforms(car):
 )
 def test_bosch_a_gate_respects_param_and_longitudinal_mode(car, radar_enabled, alpha_long, radar_unavailable):
   params = Params()
-  params.put_bool("HondaBoschARadar", radar_enabled)
+  params.put_bool("HondaBoschARadar", radar_enabled, block=True)
   try:
     cp = CarInterface.get_params(car, gen_empty_fingerprint(), [], alpha_long, False, False)
   finally:
     # Preserve the module's default-on test setup for the remaining integration cases.
-    params.put_bool("HondaBoschARadar", True)
+    params.put_bool("HondaBoschARadar", True, block=True)
 
   assert cp.openpilotLongitudinalControl is alpha_long
   assert cp.radarUnavailable is radar_unavailable
