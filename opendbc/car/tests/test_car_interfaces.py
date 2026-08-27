@@ -7,6 +7,7 @@ from opendbc.car.fingerprints import FW_VERSIONS
 from opendbc.car.fw_versions import FW_QUERY_CONFIGS
 from opendbc.car.interfaces import CarInterfaceBase, get_interface_attr
 from opendbc.car.values import PLATFORMS
+from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 from opendbc.testing import Fuzzy, fuzzy_test
 
 ALL_ECUS = tuple(sorted({ecu for ecus in FW_VERSIONS.values() for ecu in ecus} |
@@ -32,11 +33,13 @@ def get_fuzzy_car_interface(car_name: str, fuzzy: Fuzzy) -> CarInterfaceBase:
   CarInterface = interfaces[car_name]
   car_fw = fuzzy.list(generate_car_fw)
   alpha_long = fuzzy.choice([True, False])
+  interface_config = make_test_car_config()
   car_params = CarInterface.get_params(car_name, fingerprints, car_fw,
-                                       alpha_long=alpha_long, is_release=False, docs=False)
+                                       alpha_long=alpha_long, is_release=False, docs=False,
+                                       interface_config=interface_config)
   car_params_sp = CarInterface.get_params_sp(car_params, car_name, fingerprints, car_fw,
                                              alpha_long=alpha_long, is_release_sp=False, docs=False)
-  return CarInterface(car_params, car_params_sp)
+  return CarInterface(car_params, car_params_sp, interface_config)
 
 
 def _make_car_test(car_name):

@@ -20,6 +20,7 @@ from opendbc.car import structs
 from opendbc.car.can_definitions import CanData
 from opendbc.car.car_helpers import can_fingerprint, interfaces
 from opendbc.car.logreader import LogReader, decompress_stream
+from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 
 TOLERANCE = 1e-4
@@ -67,9 +68,10 @@ def replay_segment(platform: str, can_msgs: list[Any]) -> tuple[structs.CarParam
   _, fingerprint = can_fingerprint(can_recv)
 
   CarInterface = interfaces[platform]
-  CP = CarInterface.get_params(platform, fingerprint, [], False, False, False)
+  interface_config = make_test_car_config()
+  CP = CarInterface.get_params(platform, fingerprint, [], False, False, False, interface_config)
   CP_SP = CarInterface.get_params_sp(CP, platform, fingerprint, [], False, False, False)
-  CI = CarInterface(CP, CP_SP)
+  CI = CarInterface(CP, CP_SP, interface_config)
   CC = structs.CarControl().as_reader()
 
   states, timestamps = [], []
