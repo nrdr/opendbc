@@ -23,6 +23,14 @@ from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 from opendbc.sunnypilot.car.subaru.values_ext import SubaruFlagsSP, SubaruSafetyFlagsSP
 from opendbc.sunnypilot.car.tesla.values import MadsScreenButtonType, TeslaFlagsSP, TeslaSafetyFlagsSP
 from opendbc.sunnypilot.car.toyota.values import ToyotaFlagsSP
+from opendbc.sunnypilot.car.runtime_config import (
+  HondaCarConfig,
+  HyundaiCarConfig,
+  SubaruCarConfig,
+  SunnypilotCarConfig,
+  TeslaCarConfig,
+  ToyotaCarConfig,
+)
 
 
 class LatControlInputs(NamedTuple):
@@ -79,28 +87,30 @@ class NanoFFModel:
 
 
 def setup_interfaces(CI, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
-                     params_list: list[dict[str, str]] | None = None,
+                     config: SunnypilotCarConfig | None,
                      can_recv: CanRecvCallable | None = None, can_send: CanSendCallable | None = None) -> None:
-  if params_list is None:
-    params_list = []
+  if config is None:
+    # Preserve opendbc's non-NRDR setup for standalone hosts without inventing
+    # host settings or defaults inside opendbc.
+    _ = CI.get_longitudinal_tuning_sp(CP, CP_SP)
+    _initialize_radar_tracks(CP, CP_SP, can_recv, can_send)
+    return
 
-  params_dict = {k: v for param in params_list for k, v in param.items()}
-
-  _initialize_custom_longitudinal_tuning(CI, CP, CP_SP, params_dict)
-  _initialize_coop_steering(CP, CP_SP, params_dict)
-  _initialize_tesla_mads_screen_button(CP, CP_SP, params_dict)
+  _initialize_custom_longitudinal_tuning(CI, CP, CP_SP, config.hyundai)
+  _initialize_coop_steering(CP, CP_SP, config.tesla)
+  _initialize_tesla_mads_screen_button(CP, CP_SP, config.tesla)
   _initialize_radar_tracks(CP, CP_SP, can_recv, can_send)
-  _initialize_stop_and_go(CP, CP_SP, params_dict)
-  _initialize_honda(CP, CP_SP, params_dict)
-  _initialize_toyota(CP, CP_SP, params_dict)
+  _initialize_stop_and_go(CP, CP_SP, config.subaru)
+  _initialize_honda(CP, CP_SP, config.honda)
+  _initialize_toyota(CP, CP_SP, config.toyota)
 
 
 def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
-                                           params_dict: dict[str, str]) -> None:
+                                           config: HyundaiCarConfig) -> None:
 
   # Hyundai Custom Longitudinal Tuning
   if CP.brand == 'hyundai':
-    hyundai_longitudinal_tuning = int(params_dict.get("HyundaiLongitudinalTuning", 0))
+    hyundai_longitudinal_tuning = config.longitudinal_tuning
     if hyundai_longitudinal_tuning == LongitudinalTuningType.DYNAMIC:
       CP_SP.flags |= HyundaiFlagsSP.LONG_TUNING_DYNAMIC.value
     if hyundai_longitudinal_tuning == LongitudinalTuningType.PREDICTIVE:
@@ -110,17 +120,16 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
 
 
 def _initialize_coop_steering(CP: structs.CarParams, CP_SP: structs.CarParamsSP,
-                              params_dict: dict[str, str]) -> None:
+                              config: TeslaCarConfig) -> None:
   if CP.brand == 'tesla':
-    coop_steering = int(params_dict.get("TeslaCoopSteering", 0)) == 1
-    if coop_steering:
+    if config.cooperative_steering:
       CP_SP.flags |= TeslaFlagsSP.COOP_STEERING.value
 
 
 def _initialize_tesla_mads_screen_button(CP: structs.CarParams, CP_SP: structs.CarParamsSP,
-                                         params_dict: dict[str, str]) -> None:
+                                         config: TeslaCarConfig) -> None:
   if CP.brand == 'tesla' and CP_SP.flags & TeslaFlagsSP.HAS_VEHICLE_BUS:
-    selection = int(params_dict.get("TeslaMadsScreenButton", MadsScreenButtonType.OFF))
+    selection = config.mads_screen_button
     if selection == MadsScreenButtonType.THREE_FINGER:
       CP_SP.flags |= TeslaFlagsSP.MADS_SCREEN_BUTTON_3_FINGER.value
       CP_SP.safetyParam |= TeslaSafetyFlagsSP.MADS_SCREEN_BUTTON_3_FINGER
@@ -143,24 +152,19 @@ def _initialize_radar_tracks(CP: structs.CarParams, CP_SP: structs.CarParamsSP,
       CP.radarUnavailable = not tracks_enabled
 
 
-def _initialize_stop_and_go(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params_dict: dict[str, str]) -> None:
+def _initialize_stop_and_go(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config: SubaruCarConfig) -> None:
   if CP.brand == 'subaru' and not CP.flags & (SubaruFlags.GLOBAL_GEN2 | SubaruFlags.HYBRID):
-    stop_and_go = int(params_dict.get("SubaruStopAndGo", 0)) == 1
-    stop_and_go_manual_parking_brake = int(params_dict.get("SubaruStopAndGoManualParkingBrake", 0)) == 1
-
-    if stop_and_go:
+    if config.stop_and_go:
       CP_SP.flags |= SubaruFlagsSP.STOP_AND_GO.value
-    if stop_and_go_manual_parking_brake:
+    if config.stop_and_go_manual_parking_brake:
       CP_SP.flags |= SubaruFlagsSP.STOP_AND_GO_MANUAL_PARKING_BRAKE.value
-    if stop_and_go or stop_and_go_manual_parking_brake:
+    if config.stop_and_go or config.stop_and_go_manual_parking_brake:
       CP_SP.safetyParam |= SubaruSafetyFlagsSP.STOP_AND_GO
 
 
-def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params_dict: dict[str, str]) -> None:
+def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config: HondaCarConfig) -> None:
   if CP.brand == 'honda':
-    honda_stock_long = int(params_dict.get("HondaEnforceStockLongitudinal", 0)) == 1
-
-    if honda_stock_long:
+    if config.enforce_stock_longitudinal:
       CP.openpilotLongitudinalControl = False
       CP.pcmCruise = True
       CP_SP.flags |= HondaFlagsSP.STOCK_LONGITUDINAL.value
@@ -172,16 +176,13 @@ def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params_
         CP.safetyConfigs[-1].safetyParam &= ~HondaSafetyFlags.BOSCH_LONG.value
 
 
-def _initialize_toyota(CP: structs.CarParams, CP_SP: structs.CarParamsSP, params_dict: dict[str, str]) -> None:
+def _initialize_toyota(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config: ToyotaCarConfig) -> None:
   if CP.brand == 'toyota':
-    toyota_stock_long = int(params_dict.get("ToyotaEnforceStockLongitudinal", 0)) == 1
-    toyota_stop_and_go_hack = int(params_dict.get("ToyotaStopAndGoHack", 0)) == 1
-
-    if toyota_stock_long:
+    if config.enforce_stock_longitudinal:
       CP_SP.flags |= ToyotaFlagsSP.STOCK_LONGITUDINAL.value
       CP.alphaLongitudinalAvailable = False
       CP.openpilotLongitudinalControl = False
       CP.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 
-    if toyota_stop_and_go_hack and CP.openpilotLongitudinalControl:
+    if config.stop_and_go_hack and CP.openpilotLongitudinalControl:
       CP_SP.flags |= ToyotaFlagsSP.STOP_AND_GO_HACK.value

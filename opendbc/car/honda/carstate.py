@@ -5,14 +5,14 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import (CAR, DBC, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD,
-                                      HONDA_BOSCH_RADARLESS, HONDA_BOSCH_TJA_CONTROL, HONDA_NIDEC_ALT_SCM_MESSAGES,
-                                      CarControllerParams, CruiseButtons, CruiseSettings, GearShifter, HondaFlags)
+from opendbc.car.honda.values import (CAR, DBC, CarControllerParams, CruiseButtons, CruiseSettings,
+                                      GearShifter, HondaFlags)
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.honda.hud_objects import HudObjectTracker
 
 from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
 from opendbc.sunnypilot.car.honda.carstate import HondaCarStateFeatures
+from opendbc.sunnypilot.car.runtime_config import HondaCarConfig
 
 TransmissionType = structs.CarParams.TransmissionType
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -23,12 +23,14 @@ SETTINGS_BUTTONS_DICT = {CruiseSettings.DISTANCE: ButtonType.gapAdjustCruise, Cr
 
 
 class CarState(CarStateBase, CarStateExt):
-  def __init__(self, CP, CP_SP):
+  def __init__(self, CP, CP_SP, config: HondaCarConfig | None = None):
+    if config is None:
+      raise ValueError("Honda state requires a host-provided HondaCarConfig")
     CarStateBase.__init__(self, CP, CP_SP)
     CarStateExt.__init__(self, CP, CP_SP)
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 
-    self.nrdr = HondaCarStateFeatures(CP)
+    self.nrdr = HondaCarStateFeatures(CP, config)
 
     if CP.transmissionType != TransmissionType.manual:
       self.gearbox_msg = "GEARBOX_AUTO"

@@ -8,40 +8,14 @@ Run from cwd C:\\nrdrbranchdebug\\pyshim:
     --confcutdir="C:\\nrdrbranchdebug\\wt-long\\opendbc_repo\\opendbc"
 """
 import math
-import sys
-import types
 import unittest
 
-
-# ---------------------------------------------------------------------------
-# Minimal stub: only openpilot.common.params is needed; everything else in
-# opendbc is importable directly from the PYTHONPATH.
-# ---------------------------------------------------------------------------
-
-class _FakeParams:
-  def __init__(self): self._store = {}
-  def get(self, k): return self._store.get(k)
-  def get_bool(self, k): return bool(self._store.get(k, False))
-  def put_nonblocking(self, k, v): self._store[k] = v
-
-_op = types.ModuleType("openpilot")
-_op_common = types.ModuleType("openpilot.common")
-_op_params = types.ModuleType("openpilot.common.params")
-_op_params.Params = _FakeParams
-sys.modules.setdefault("openpilot", _op)
-sys.modules.setdefault("openpilot.common", _op_common)
-sys.modules.setdefault("openpilot.common.params", _op_params)
-
-# Now import what we need from the production module
-from opendbc.sunnypilot.car.honda.longitudinal import (  # noqa: E402
+from opendbc.sunnypilot.car.honda.longitudinal import (
   LongGasLearner,
   _LAG_TICKS,
   _LEARNER_DT,
   _HARD_LO,
   _HARD_HI,
-  _SOFT_LO,
-  _SOFT_HI,
-  _DECAY_PER_TICK,
   _FACTOR_FILTER_ALPHA,
   _PITCH_DEADBAND,
   LEARN_VERSION,

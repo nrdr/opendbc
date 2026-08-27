@@ -34,20 +34,11 @@ from opendbc.car.honda.radar_interface import (
 from opendbc.car.honda.values import CAR, HONDA_BOSCH_A, HondaSafetyFlags
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 from opendbc.sunnypilot.car.interfaces import _initialize_honda
-from openpilot.common.params import Params
-
-# Tester toggle: CP is computed once at import time below (many helpers in this module close over
-# it), which runs before any pytest fixture could -- so this has to be plain top-level code, not a
-# fixture. teardown_module() restores it once every test in this file has run (mirrors
-# gm/tests/test_gm.py's put_bool/finally pattern for params-gated _get_params behavior).
-Params().put_bool("HondaBoschARadar", True, block=True)
+from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 
-def teardown_module(module):
-  Params().remove("HondaBoschARadar")
-
-
-CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC_BOSCH)
+RADAR_CONFIG = make_test_car_config(bosch_a_radar=True)
+CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC_BOSCH, RADAR_CONFIG)
 CP_SP = structs.CarParamsSP()
 BUS = CanBus(CP).camera
 
@@ -1112,12 +1103,12 @@ def test_civic_bosch_object_feed_uses_camera_side_acc_can():
 # HondaBoschARadar=True set at module import time (before any fixture exists) was never written.
 # Computing these at module scope, in the same environment CP uses, sidesteps that entirely.
 _OPEN_BOSCH_A_CARS = sorted(HONDA_BOSCH_A, key=str)
-_OPEN_BOSCH_A_CPS = {car: CarInterface.get_non_essential_params(car) for car in _OPEN_BOSCH_A_CARS}
+_OPEN_BOSCH_A_CPS = {car: CarInterface.get_non_essential_params(car, RADAR_CONFIG) for car in _OPEN_BOSCH_A_CARS}
 
 # radarless and CANFD Bosch platforms respectively -- same HONDA_BOSCH family as Civic Bosch, but
 # excluded from HONDA_BOSCH_A, so the gate must stay closed regardless of the tester toggle.
 _CLOSED_BOSCH_A_CARS = [CAR.HONDA_CIVIC_2022, CAR.HONDA_ACCORD_11G]
-_CLOSED_BOSCH_A_CPS = {car: CarInterface.get_non_essential_params(car) for car in _CLOSED_BOSCH_A_CARS}
+_CLOSED_BOSCH_A_CPS = {car: CarInterface.get_non_essential_params(car, RADAR_CONFIG) for car in _CLOSED_BOSCH_A_CARS}
 
 
 @pytest.mark.parametrize("car", _OPEN_BOSCH_A_CARS)
@@ -1142,13 +1133,8 @@ def test_bosch_a_gate_stays_closed_for_non_bosch_a_platforms(car):
   ((False, False, True), (False, True, True), (True, False, False), (True, True, False)),
 )
 def test_bosch_a_gate_is_independent_of_longitudinal_mode(car, radar_enabled, alpha_long, radar_unavailable):
-  params = Params()
-  params.put_bool("HondaBoschARadar", radar_enabled, block=True)
-  try:
-    cp = CarInterface.get_params(car, gen_empty_fingerprint(), [], alpha_long, False, False)
-  finally:
-    # Preserve the module's default-on test setup for the remaining integration cases.
-    params.put_bool("HondaBoschARadar", True, block=True)
+  config = make_test_car_config(bosch_a_radar=radar_enabled)
+  cp = CarInterface.get_params(car, gen_empty_fingerprint(), [], alpha_long, False, False, config)
 
   assert cp.openpilotLongitudinalControl is alpha_long
   assert cp.radarUnavailable is radar_unavailable
@@ -1161,12 +1147,8 @@ def test_bosch_a_gate_is_independent_of_longitudinal_mode(car, radar_enabled, al
 
 @pytest.mark.parametrize("radar_enabled", (False, True))
 def test_force_stock_preserves_bosch_radar_param_state(radar_enabled):
-  params = Params()
-  params.put_bool("HondaBoschARadar", radar_enabled, block=True)
-  try:
-    cp = CarInterface.get_params(CAR.HONDA_CIVIC_BOSCH, gen_empty_fingerprint(), [], True, False, False)
-  finally:
-    params.put_bool("HondaBoschARadar", True, block=True)
+  config = make_test_car_config(bosch_a_radar=radar_enabled, honda_stock_longitudinal=True)
+  cp = CarInterface.get_params(CAR.HONDA_CIVIC_BOSCH, gen_empty_fingerprint(), [], True, False, False, config)
 
   cp_sp = structs.CarParamsSP()
   assert cp.openpilotLongitudinalControl is True
@@ -1174,9 +1156,7 @@ def test_force_stock_preserves_bosch_radar_param_state(radar_enabled):
   assert cp.radarUnavailable is not radar_enabled
   assert cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_LONG.value
 
-  _initialize_honda(cp, cp_sp, {
-    "HondaEnforceStockLongitudinal": "1",
-  })
+  _initialize_honda(cp, cp_sp, config.honda)
 
   assert cp.openpilotLongitudinalControl is False
   assert cp.pcmCruise is True

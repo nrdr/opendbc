@@ -1,9 +1,6 @@
 import math
-import threading
-from queue import Empty, Queue
 
 import numpy as np
-from openpilot.common.params import Params
 
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, rate_limit, make_tester_present_msg, structs
@@ -19,6 +16,7 @@ from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarContro
 from opendbc.sunnypilot.car.honda.icbm import IntelligentCruiseButtonManagementInterface
 from opendbc.sunnypilot.car.honda.can import create_camera_message
 from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures
+from opendbc.sunnypilot.car.runtime_config import HondaCarConfig
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -101,33 +99,10 @@ def process_hud_alert(hud_alert):
   return alert_fcw, alert_steer_required
 
 
-class HondaParamWriter:
-  def __init__(self):
-    self._params = Params()
-    self._queue = Queue()
-    self._thread = threading.Thread(target=self._run, name="honda-param-writer", daemon=True)
-    self._thread.start()
-
-  def put_many(self, values):
-    self._queue.put({key: float(value) for key, value in values.items()})
-
-  def _run(self):
-    while True:
-      pending = self._queue.get()
-
-      # Collapse queued snapshots so delayed writes keep only the newest value per key.
-      try:
-        while True:
-          pending.update(self._queue.get_nowait())
-      except Empty:
-        pass
-
-      for key, value in pending.items():
-        self._params.put(key, value)
-
-
 class CarController(CarControllerBase, MadsCarController, GasInterceptorCarController, IntelligentCruiseButtonManagementInterface):
-  def __init__(self, dbc_names, CP, CP_SP):
+  def __init__(self, dbc_names, CP, CP_SP, config: HondaCarConfig | None = None):
+    if config is None:
+      raise ValueError("Honda controller requires a host-provided HondaCarConfig")
     CarControllerBase.__init__(self, dbc_names, CP, CP_SP)
     MadsCarController.__init__(self)
     GasInterceptorCarController.__init__(self, CP, CP_SP)
@@ -141,8 +116,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.lkas_hud_key = None
     self.lkas_state_change_frames = 0
     self.tja_control = bool(CP.flags & HondaFlags.BOSCH_TJA_CONTROL)
-    self.param_writer = HondaParamWriter()
-    self.nrdr = HondaControllerFeatures(CP, CP_SP)
+    self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
 
     self.braking = False
     self.brake_steady = 0.
@@ -162,9 +136,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.last_lkas_button_frame = 0
     self.radar_disable_counter = 0
 
-    self.gasfactor = 1.0 if (Params().get("HondaGasFactorParams") is None) else Params().get("HondaGasFactorParams")
+    self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
     self.gasfactor_before_gasmax = self.gasfactor
-    self.windfactor = 1.0 if (Params().get("HondaWindFactorParams") is None) else Params().get("HondaWindFactorParams")
     self.windfactor_before_gasmax = self.windfactor_before_brake = self.windfactor
     self.pitch = 0.0
     self.radar_mux = 0
@@ -201,11 +174,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       accel = actuators.accel
       if (self.CP.carFingerprint in (CAR.ACURA_MDX_3G, CAR.ACURA_MDX_3G_MMR)) and (accel > max(0, CS.out.aEgo) + 0.1):
         accel = 10000.0 # help with lagged accel until pedal tuning is inserted
-      ecu_matched = live["ecu_matched_long"] and self.CP.carFingerprint not in HONDA_BOSCH
+      ecu_matched = live.ecu_matched_long and self.CP.carFingerprint not in HONDA_BOSCH
       accel_cmd = self.nrdr.nidec_accel_command(actuators.accel, ecu_matched)
       gas, brake = compute_gas_brake(accel_cmd + hill_brake, CS.out.vEgo, self.CP)
       brake = self.nrdr.nidec_brake_authority(
-        accel_cmd + hill_brake, brake, CS.out.vEgo, live["full_brake_authority"],
+        accel_cmd + hill_brake, brake, CS.out.vEgo, live.full_brake_authority,
       )
       gas, brake = self.nrdr.nidec_gas_brake(accel_cmd, gas, brake, CS.out.vEgo, ecu_matched)
     else:
@@ -221,7 +194,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     pre_limit_brake, self.braking, self.brake_steady = actuator_hysteresis(brake, self.braking, self.brake_steady)
 
     # *** rate limit after the enable check ***
-    brake_rate_up = live["stopping_decel_rate"] if actuators.longControlState == LongCtrlState.stopping else 3.0
+    brake_rate_up = live.stopping_decel_rate if actuators.longControlState == LongCtrlState.stopping else 3.0
     self.brake_last = rate_limit(pre_limit_brake, self.brake_last, -2., brake_rate_up * DT_CTRL)
 
     # vehicle hud display, wait for one update from 10Hz 0x304 msg
@@ -420,7 +393,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               self.gasfactor_before_gasmax = self.gasfactor
               self.windfactor_before_gasmax = self.windfactor
           self.gasfactor, self.windfactor = self.nrdr.update_bosch_learner(
-            CC, CS, actuators, accel, gas_pedal_force, wind_brake_ms2, self.pitch, self.params, live["live_learning_gas"],
+            CC, CS, actuators, accel, gas_pedal_force, wind_brake_ms2, self.pitch, self.params, live.live_learning_gas,
           )
           self.gas = float(np.interp((gas_pedal_force - min_gas) * self.gasfactor + min_gas,
                                      self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
@@ -438,7 +411,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, CC.enabled, CC.longActive, self.accel, self.gas,
                                                           self.stopping_counter, self.CP, gas_pedal_force))
         else:
-          apply_brake = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live["full_brake_authority"])
+          apply_brake = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live.full_brake_authority)
           apply_brake = int(np.clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
           pump_on, self.last_pump_ts = brake_pump_hysteresis(apply_brake, self.apply_brake_last, self.last_pump_ts, ts)
 
@@ -446,7 +419,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           can_sends.append(hondacan.create_brake_command(self.packer, self.CAN, apply_brake, pump_on,
                                                          pcm_override, pcm_cancel_cmd, alert_fcw,
                                                          CS.stock_brake, self.CP_SP,
-                                                         clear_dash_faults=live["clear_dash_faults"]))
+                                                         clear_dash_faults=live.clear_dash_faults))
           self.apply_brake_last = apply_brake
           self.brake = apply_brake / self.params.NIDEC_BRAKE_MAX
 
@@ -464,10 +437,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               self.windfactor_before_brake = self.windfactor
 
           learned_gas = self.nrdr.update_nidec_learner(CC, CS, actuators, gas, brake, wind_brake, self.pitch,
-                                                       live["live_learning_gas"] and self.CP_SP.enableGasInterceptor)
+                                                       live.live_learning_gas and self.CP_SP.enableGasInterceptor)
           self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
           can_sends.extend(GasInterceptorCarController.update(
-            self, CC, CS, learned_gas, brake, wind_brake, self.packer, self.frame, live["roen_acceleration_limits"],
+            self, CC, CS, learned_gas, brake, wind_brake, self.packer, self.frame, live.roen_acceleration_limits,
           ))
 
     # Send dashboard UI commands. On CAN FD, ACC_HUD is a radar/ADAS look-alike that openpilot only
@@ -493,7 +466,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                    self.CP.openpilotLongitudinalControl,
                                                    nrdr_options=self.nrdr.nidec_hud_options(CC, CS, hud_control, live)))
 
-      if live["spoof_camera_messages"] and self.CP.carFingerprint not in HONDA_BOSCH:
+      if live.spoof_camera_messages and self.CP.carFingerprint not in HONDA_BOSCH:
         can_sends.append(create_camera_message(self.packer, self.CAN.pt))
 
       steering_available = CS.out.cruiseState.available and CS.out.vEgo > max(self.params.STEER_GLOBAL_MIN_SPEED, self.CP.minSteerSpeed)
@@ -617,13 +590,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     new_actuators.torqueOutputCan = apply_torque
 
     if self.frame % 6000 == 0:
-      if self.nrdr.replaces_longitudinal:
-        self.nrdr.persist()
-      else:
-        self.param_writer.put_many({
-          "HondaGasFactorParams": self.gasfactor,
-          "HondaWindFactorParams": self.windfactor,
-        })
+      self.nrdr.persist()
 
     self.frame += 1
     return new_actuators, can_sends

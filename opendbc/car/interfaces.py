@@ -103,18 +103,29 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
 
   DRIVABLE_GEARS: tuple[structs.CarState.GearShifter, ...] = ()
 
-  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
+  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, interface_config: Any = None):
     self.CP = CP
     self.CP_SP = CP_SP
+    self.interface_config = interface_config
 
     self.frame = 0
     self.v_ego_cluster_seen = False
 
-    self.CS: CarStateBase = self.CarState(CP, CP_SP)
+    self.CS: CarStateBase = self._create_car_state(CP, CP_SP, interface_config)
     self.can_parsers: dict[StrEnum, CANParser] = self.CS.get_can_parsers(CP, CP_SP)
 
     dbc_names = {bus: cp.dbc_name for bus, cp in self.can_parsers.items()}
-    self.CC: CarControllerBase = self.CarController(dbc_names, CP, CP_SP)
+    self.CC: CarControllerBase = self._create_car_controller(dbc_names, CP, CP_SP, interface_config)
+
+  @classmethod
+  def _create_car_state(cls, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
+                        interface_config: Any = None) -> 'CarStateBase':
+    return cls.CarState(CP, CP_SP)
+
+  @classmethod
+  def _create_car_controller(cls, dbc_names: dict[StrEnum, str], CP: structs.CarParams, CP_SP: structs.CarParamsSP,
+                             interface_config: Any = None) -> 'CarControllerBase':
+    return cls.CarController(dbc_names, CP, CP_SP)
 
   def apply(self, c: structs.CarControl, c_sp: structs.CarControlSP, now_nanos: int | None = None,
             model=None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
@@ -129,11 +140,11 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
     return ACCEL_MIN, ACCEL_MAX
 
   @classmethod
-  def get_non_essential_params(cls, candidate: str) -> structs.CarParams:
+  def get_non_essential_params(cls, candidate: str, interface_config: Any = None) -> structs.CarParams:
     """
     Parameters essential to controlling the car may be incomplete or wrong without FW versions or fingerprints.
     """
-    return cls.get_params(candidate, gen_empty_fingerprint(), list(), False, False, False)
+    return cls.get_params(candidate, gen_empty_fingerprint(), list(), False, False, False, interface_config)
 
   @classmethod
   def get_non_essential_params_sp(cls, car_params, candidate: str) -> structs.CarParamsSP:
@@ -141,7 +152,7 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
 
   @classmethod
   def get_params(cls, candidate: str, fingerprint: dict[int, dict[int, int]], car_fw: list[structs.CarParams.CarFw],
-                 alpha_long: bool, is_release: bool, docs: bool) -> structs.CarParams:
+                 alpha_long: bool, is_release: bool, docs: bool, interface_config: Any = None) -> structs.CarParams:
     ret = CarInterfaceBase.get_std_params(candidate)
 
     platform = PLATFORMS[candidate]
@@ -155,6 +166,7 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
     ret.flags |= int(platform.config.flags)
 
     ret = cls._get_params(ret, candidate, fingerprint, car_fw, alpha_long, is_release, docs)
+    ret = cls._configure_params(ret, interface_config, docs)
 
     # Vehicle mass is published curb weight plus assumed payload such as a human driver; notCars have no assumed payload
     if not ret.notCar:
@@ -164,6 +176,11 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
     ret.rotationalInertia = scale_rot_inertia(ret.mass, ret.wheelbase)
     ret.tireStiffnessFront, ret.tireStiffnessRear = scale_tire_stiffness(ret.mass, ret.wheelbase, ret.centerToFront, ret.tireStiffnessFactor)
 
+    return ret
+
+  @staticmethod
+  def _configure_params(ret: structs.CarParams, interface_config: Any, docs: bool) -> structs.CarParams:
+    """Optional host-configuration seam. Base vehicle behavior remains unchanged."""
     return ret
 
   @classmethod

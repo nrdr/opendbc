@@ -1,17 +1,11 @@
-import json
 import math
-import os
-import threading
 from collections import deque
-from queue import Empty, Queue
 
 import numpy as np
-from openpilot.common.params import Params
 
 from opendbc.car import DT_CTRL
 
 
-LEARNER_META_PATH = "/data/honda_learner_meta.json"
 LEARN_VERSION = 2
 
 _LEARNER_DT = 2 * DT_CTRL
@@ -147,69 +141,3 @@ class LongGasLearner:
     if not math.isfinite(self.windfactor):
       self.windfactor = 1.0
     return self.gasfactor, self.windfactor
-
-
-def load_factors(car_fingerprint: str) -> tuple[float, float]:
-  try:
-    params = Params()
-    raw_gas = params.get("HondaGasFactorParams")
-    raw_wind = params.get("HondaWindFactorParams")
-    if raw_gas is None or raw_wind is None:
-      return 1.0, 1.0
-
-    with open(LEARNER_META_PATH, encoding="utf-8") as file:
-      metadata = json.load(file)
-    if metadata.get("car_fingerprint") != car_fingerprint or metadata.get("learn_version") != LEARN_VERSION:
-      return 1.0, 1.0
-
-    gas = float(raw_gas.decode("utf-8") if isinstance(raw_gas, bytes) else raw_gas)
-    wind = float(raw_wind.decode("utf-8") if isinstance(raw_wind, bytes) else raw_wind)
-    if not math.isfinite(gas) or not math.isfinite(wind):
-      return 1.0, 1.0
-    return float(np.clip(gas, _HARD_LO, _HARD_HI)), float(np.clip(wind, _HARD_LO, _HARD_HI))
-  except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-    return 1.0, 1.0
-
-
-def write_metadata(car_fingerprint: str):
-  try:
-    temporary_path = LEARNER_META_PATH + ".tmp"
-    with open(temporary_path, "w", encoding="utf-8") as file:
-      json.dump({"car_fingerprint": car_fingerprint, "learn_version": LEARN_VERSION}, file, sort_keys=True)
-      file.write("\n")
-      file.flush()
-      os.fsync(file.fileno())
-    os.replace(temporary_path, LEARNER_META_PATH)
-  except OSError:
-    pass
-
-
-class HondaParamWriter:
-  def __init__(self):
-    self._params = Params()
-    self._queue = Queue()
-    threading.Thread(target=self._run, name="honda-param-writer", daemon=True).start()
-
-  def put_many(self, values, car_fingerprint: str):
-    self._queue.put(({key: float(value) for key, value in values.items()}, car_fingerprint))
-
-  def _run(self):
-    try:
-      from openpilot.common.realtime import drop_realtime, set_core_affinity
-      drop_realtime()
-      set_core_affinity(list(range(os.cpu_count() or 1)))
-    except (ImportError, OSError):
-      pass
-
-    while True:
-      pending, car_fingerprint = self._queue.get()
-      try:
-        while True:
-          newer, car_fingerprint = self._queue.get_nowait()
-          pending.update(newer)
-      except Empty:
-        pass
-
-      for key, value in pending.items():
-        self._params.put(key, value, block=True)
-      write_metadata(car_fingerprint)

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from opendbc.car.honda.values import CAR
-from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures, initialize_live_learning_gas
+from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures
 from opendbc.sunnypilot.car.honda.gas_interceptor import gas_multiplier
 
 
@@ -11,37 +11,6 @@ def _features(fingerprint):
   features = HondaControllerFeatures.__new__(HondaControllerFeatures)
   features.CP = SimpleNamespace(carFingerprint=fingerprint)
   return features
-
-
-class FakeParams:
-  def __init__(self, value=None):
-    self.value = value
-    self.writes = []
-
-  def get(self, key, return_default=False):
-    assert key == "HondaLiveLearningGas"
-    assert not return_default
-    return self.value
-
-  def put_bool(self, key, value, block=False):
-    self.value = value
-    self.writes.append((key, value, block))
-
-
-@pytest.mark.parametrize(("gas_interceptor", "expected"), ((True, False), (False, True)))
-def test_live_learning_gas_initializes_from_interceptor(gas_interceptor, expected):
-  params = FakeParams()
-  initialize_live_learning_gas(params, gas_interceptor)
-  assert params.value is expected
-  assert params.writes == [("HondaLiveLearningGas", expected, True)]
-
-
-@pytest.mark.parametrize("existing", (True, False))
-def test_live_learning_gas_preserves_user_override(existing):
-  params = FakeParams(existing)
-  initialize_live_learning_gas(params, not existing)
-  assert params.value is existing
-  assert params.writes == []
 
 
 def test_full_brake_authority_uses_complete_nidec_range():

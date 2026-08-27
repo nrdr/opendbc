@@ -5,31 +5,27 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu, clear_all_dtcs, clear_ecu_dtcs
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_A, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS,
-                                      HONDA_GAS_INTERCEPTOR_THRESHOLD_512, HONDA_NIDEC_ALT_SCM_MESSAGES,
-                                      CarControllerParams, HondaFlags, HondaSafetyFlags)
+                                      HONDA_GAS_INTERCEPTOR_THRESHOLD_512, CarControllerParams, HondaFlags, HondaSafetyFlags)
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
-from openpilot.common.params import Params, UnknownKeyName
 
 from opendbc.sunnypilot.car.honda.interface_ext import configure_honda_platform, configure_modified_eps
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
+from opendbc.sunnypilot.car.runtime_config import SunnypilotCarConfig
 
 TransmissionType = structs.CarParams.TransmissionType
 
 
-def _use_bosch_a_radar(candidate, docs: bool) -> bool:
+def _use_bosch_a_radar(candidate, docs: bool, interface_config: SunnypilotCarConfig | None) -> bool:
   # TODO: remove this toggle+param once the 16-slot Bosch-A decoder (see radar_interface.py) has been
   # field-validated across all HONDA_BOSCH_A platforms, then make radarUnavailable unconditional here.
   if candidate not in HONDA_BOSCH_A:
     return False
   if docs:
     return False
-  try:
-    return Params().get_bool("HondaBoschARadar")
-  except UnknownKeyName:
-    return False
+  return interface_config is not None and interface_config.honda.bosch_a_radar
 
 
 class CarInterface(CarInterfaceBase):
@@ -73,8 +69,6 @@ class CarInterface(CarInterfaceBase):
       # Bosch-A object frames remain available on the camera-side ACC-CAN while openpilot
       # longitudinal silences the radar's stock ACC commands. Keep the receive-only decoder
       # independent of the selected longitudinal mode, as in the original Bosch-A radar PR.
-      if _use_bosch_a_radar(candidate, docs):
-        ret.radarUnavailable = False
       ret.pcmCruise = not ret.openpilotLongitudinalControl
     else:
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hondaNidec)]
@@ -340,6 +334,23 @@ class CarInterface(CarInterfaceBase):
     configure_honda_platform(ret, candidate, car_fw, docs)
 
     return ret
+
+  @staticmethod
+  def _configure_params(ret: structs.CarParams, interface_config: SunnypilotCarConfig | None,
+                        docs: bool) -> structs.CarParams:
+    if ret.carFingerprint in HONDA_BOSCH_A:
+      ret.radarUnavailable = not _use_bosch_a_radar(ret.carFingerprint, docs, interface_config)
+    return ret
+
+  @classmethod
+  def _create_car_state(cls, CP, CP_SP, interface_config: SunnypilotCarConfig | None = None):
+    honda_config = None if interface_config is None else interface_config.honda
+    return cls.CarState(CP, CP_SP, honda_config)
+
+  @classmethod
+  def _create_car_controller(cls, dbc_names, CP, CP_SP, interface_config: SunnypilotCarConfig | None = None):
+    honda_config = None if interface_config is None else interface_config.honda
+    return cls.CarController(dbc_names, CP, CP_SP, honda_config)
 
   @staticmethod
   def _get_params_sp(stock_cp: structs.CarParams, ret: structs.CarParamsSP, candidate, fingerprint: dict[int, dict[int, int]],
