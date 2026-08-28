@@ -23,11 +23,10 @@ _EXTENDED_TORQUE_LIMITS = {
   CAR.HONDA_CRV_5G: 4096,
 }
 
-_LOW_SPEED = 25.0 * CV.MPH_TO_MS
-_PID_BP = [0.0, _LOW_SPEED - 1e-3, _LOW_SPEED, 50.0 * CV.MPH_TO_MS]
-_KP = [0.018, 0.024, 0.048, 0.060]
-_KI = [0.006, 0.008, 0.016, 0.020]
-_KF = [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]
+_NBOX_KF_BP = [0.0, 25.0 * CV.MPH_TO_MS - 1e-3, 25.0 * CV.MPH_TO_MS, 50.0 * CV.MPH_TO_MS]
+_NBOX_KF = [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]
+
+
 def _restore_pid_tune(cp: structs.CarParams, candidate) -> None:
   if cp.lateralTuning.which() != "torque":
     return
@@ -58,17 +57,18 @@ def configure_modified_eps(cp: structs.CarParams, candidate) -> None:
   if candidate in _EXTENDED_TORQUE_LIMITS:
     torque_limit = _EXTENDED_TORQUE_LIMITS[candidate]
     cp.lateralParams.torqueBP, cp.lateralParams.torqueV = [[0, torque_limit], [0, torque_limit]]
-    cp.lateralTuning.pid.kf = 3.6e-6
-    cp.lateralTuning.pid.kfBP, cp.lateralTuning.pid.kfV = [_PID_BP, _KF]
     cp.steerAtStandstill = True
     cp.autoResumeSng = True
     cp.minEnableSpeed = -1.0
     cp.minSteerSpeed = -1.0
 
-  if candidate == CAR.HONDA_ACCORD:
-    bp = [0.0, 25.0 * CV.MPH_TO_MS, 50.0 * CV.MPH_TO_MS]
-    cp.lateralTuning.pid.kfBP, cp.lateralTuning.pid.kfV = [bp, [6.0e-5, 3.0e-5, 3.0e-5]]
+  if candidate == CAR.HONDA_NBOX_2G:
+    cp.lateralTuning.pid.kf = 3.6e-6
+    cp.lateralTuning.pid.kfBP, cp.lateralTuning.pid.kfV = [_NBOX_KF_BP, _NBOX_KF]
 
   if candidate in TORQUE_MOD_PID_CARS:
-    cp.lateralTuning.pid.kpBP, cp.lateralTuning.pid.kpV = [_PID_BP, _KP]
-    cp.lateralTuning.pid.kiBP, cp.lateralTuning.pid.kiV = [_PID_BP, _KI]
+    cp.lateralTuning.pid.kpBP, cp.lateralTuning.pid.kpV = [[0.0], [0.03]]
+    cp.lateralTuning.pid.kiBP, cp.lateralTuning.pid.kiV = [[0.0], [0.01]]
+    cp.lateralTuning.pid.kf = 1.2e-5
+    cp.lateralTuning.pid.kfBP = []
+    cp.lateralTuning.pid.kfV = []
