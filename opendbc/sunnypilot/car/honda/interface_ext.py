@@ -24,7 +24,7 @@ _EXTENDED_TORQUE_LIMITS = {
 }
 
 _NBOX_KF_BP = [0.0, 25.0 * CV.MPH_TO_MS - 1e-3, 25.0 * CV.MPH_TO_MS, 50.0 * CV.MPH_TO_MS]
-_NBOX_KF = [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6]
+_NBOX_KF = [0.0000024, 0.0000018, 0.0000036, 0.000006]
 
 
 def _restore_pid_tune(cp: structs.CarParams, candidate) -> None:
@@ -63,12 +63,12 @@ def configure_modified_eps(cp: structs.CarParams, candidate) -> None:
     cp.minSteerSpeed = -1.0
 
   if candidate == CAR.HONDA_NBOX_2G:
-    cp.lateralTuning.pid.kf = 3.6e-6
+    cp.lateralTuning.pid.kf = 0.0000036
     cp.lateralTuning.pid.kfBP, cp.lateralTuning.pid.kfV = [_NBOX_KF_BP, _NBOX_KF]
 
   if candidate in TORQUE_MOD_PID_CARS:
     cp.lateralTuning.pid.kpBP, cp.lateralTuning.pid.kpV = [[0.0], [0.03]]
     cp.lateralTuning.pid.kiBP, cp.lateralTuning.pid.kiV = [[0.0], [0.01]]
-    cp.lateralTuning.pid.kf = 1.2e-5
+    cp.lateralTuning.pid.kf = 0.000012
     cp.lateralTuning.pid.kfBP = []
     cp.lateralTuning.pid.kfV = []

@@ -69,7 +69,7 @@ class TestHondaPidTune(unittest.TestCase):
     self._assert_float_sequence(CP.lateralTuning.pid.kpV, [0.03])
     self._assert_float_sequence(CP.lateralTuning.pid.kiBP, [0.0])
     self._assert_float_sequence(CP.lateralTuning.pid.kiV, [0.01])
-    self.assertAlmostEqual(CP.lateralTuning.pid.kf, 1.2e-5, delta=1e-12)
+    self.assertAlmostEqual(CP.lateralTuning.pid.kf, 0.000012, delta=1e-12)
     self.assertEqual(list(CP.lateralTuning.pid.kfBP), [])
     self.assertEqual(list(CP.lateralTuning.pid.kfV), [])
 
@@ -122,6 +122,6 @@ class TestHondaPidTune(unittest.TestCase):
                       list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV)), original_pid)
     self.assertEqual((list(CP.lateralParams.torqueBP), list(CP.lateralParams.torqueV)),
                      ([0, 4096], [0, 4096]))
-    self.assertAlmostEqual(CP.lateralTuning.pid.kf, 3.6e-6, delta=1e-12)
+    self.assertAlmostEqual(CP.lateralTuning.pid.kf, 0.0000036, delta=1e-12)
     self._assert_float_sequence(CP.lateralTuning.pid.kfBP, [0., low_max - 1e-3, low_max, 50. * CV.MPH_TO_MS])
-    self._assert_float_sequence(CP.lateralTuning.pid.kfV, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6], delta=1e-12)
+    self._assert_float_sequence(CP.lateralTuning.pid.kfV, [0.0000024, 0.0000018, 0.0000036, 0.000006], delta=1e-12)
