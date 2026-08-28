@@ -52,35 +52,76 @@ class TestHondaGasInterceptor(unittest.TestCase):
 
 class TestHondaPidTune(unittest.TestCase):
 
+  def _assert_float_sequence(self, actual, expected, delta=1e-6):
+    self.assertEqual(len(actual), len(expected))
+    for actual_value, expected_value in zip(actual, expected, strict=True):
+      self.assertAlmostEqual(actual_value, expected_value, delta=delta)
+
   @parameterized("car_name", TORQUE_MOD_PID_CARS)
-  def test_torque_mod_four_breakpoint_pid_tune(self, car_name):
+  def test_torque_mod_static_pid_tune(self, car_name):
     fingerprint = gen_empty_fingerprint()
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_params(car_name, fingerprint, [], False, False, False)
+    original_torque = (list(CP.lateralParams.torqueBP), list(CP.lateralParams.torqueV))
     _ = CarInterface.get_params_sp(CP, car_name, fingerprint, [], False, False, False)
 
-    low_max = 25. * CV.MPH_TO_MS
-    gain_bp = [0., low_max - 1e-3, low_max, 50. * CV.MPH_TO_MS]
-    expected = (
-      (CP.lateralTuning.pid.kpBP, gain_bp),
-      (CP.lateralTuning.pid.kpV, [0.018, 0.024, 0.048, 0.060]),
-      (CP.lateralTuning.pid.kiBP, gain_bp),
-      (CP.lateralTuning.pid.kiV, [0.006, 0.008, 0.016, 0.020]),
-    )
-    for actual, target in expected:
-      self.assertEqual(len(actual), len(target))
-      for actual_value, target_value in zip(actual, target, strict=True):
-        self.assertAlmostEqual(actual_value, target_value, delta=1e-6)
+    self._assert_float_sequence(CP.lateralTuning.pid.kpBP, [0.0])
+    self._assert_float_sequence(CP.lateralTuning.pid.kpV, [0.03])
+    self._assert_float_sequence(CP.lateralTuning.pid.kiBP, [0.0])
+    self._assert_float_sequence(CP.lateralTuning.pid.kiV, [0.01])
+    self.assertAlmostEqual(CP.lateralTuning.pid.kf, 1.2e-5, delta=1e-12)
+    self.assertEqual(list(CP.lateralTuning.pid.kfBP), [])
+    self.assertEqual(list(CP.lateralTuning.pid.kfV), [])
 
-  @parameterized("car_name", [CAR.HONDA_ACCORD_11G, CAR.HONDA_CIVIC_2022, CAR.HONDA_NBOX_2G])
+    torque_limits = {
+      CAR.HONDA_CIVIC: 3840,
+      CAR.HONDA_CIVIC_BOSCH: 4096,
+      CAR.HONDA_CIVIC_BOSCH_DIESEL: 4096,
+      CAR.HONDA_CLARITY: 3840,
+      CAR.HONDA_CRV_5G: 4096,
+      CAR.HONDA_INSIGHT: 4096,
+    }
+    if car_name in torque_limits:
+      torque_limit = torque_limits[car_name]
+      self.assertEqual((list(CP.lateralParams.torqueBP), list(CP.lateralParams.torqueV)),
+                       ([0, torque_limit], [0, torque_limit]))
+    else:
+      self.assertEqual((list(CP.lateralParams.torqueBP), list(CP.lateralParams.torqueV)), original_torque)
+
+  @parameterized("car_name", [
+    CAR.HONDA_ACCORD_11G,
+    CAR.HONDA_CIVIC_2022,
+    CAR.HONDA_CRV_6G,
+    CAR.ACURA_MDX_4G,
+  ])
   def test_other_hondas_keep_platform_pid_tune(self, car_name):
     fingerprint = gen_empty_fingerprint()
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_params(car_name, fingerprint, [], False, False, False)
     original_tune = (list(CP.lateralTuning.pid.kpBP), list(CP.lateralTuning.pid.kpV),
-                     list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV))
+                     list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV),
+                     CP.lateralTuning.pid.kf, list(CP.lateralTuning.pid.kfBP), list(CP.lateralTuning.pid.kfV))
 
     _ = CarInterface.get_params_sp(CP, car_name, fingerprint, [], False, False, False)
 
     self.assertEqual((list(CP.lateralTuning.pid.kpBP), list(CP.lateralTuning.pid.kpV),
-                      list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV)), original_tune)
+                      list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV),
+                      CP.lateralTuning.pid.kf, list(CP.lateralTuning.pid.kfBP), list(CP.lateralTuning.pid.kfV)), original_tune)
+
+  def test_nbox_keeps_existing_extended_torque_feedforward_tune(self):
+    fingerprint = gen_empty_fingerprint()
+    CarInterface = interfaces[CAR.HONDA_NBOX_2G]
+    CP = CarInterface.get_params(CAR.HONDA_NBOX_2G, fingerprint, [], False, False, False)
+    original_pid = (list(CP.lateralTuning.pid.kpBP), list(CP.lateralTuning.pid.kpV),
+                    list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV))
+
+    _ = CarInterface.get_params_sp(CP, CAR.HONDA_NBOX_2G, fingerprint, [], False, False, False)
+
+    low_max = 25. * CV.MPH_TO_MS
+    self.assertEqual((list(CP.lateralTuning.pid.kpBP), list(CP.lateralTuning.pid.kpV),
+                      list(CP.lateralTuning.pid.kiBP), list(CP.lateralTuning.pid.kiV)), original_pid)
+    self.assertEqual((list(CP.lateralParams.torqueBP), list(CP.lateralParams.torqueV)),
+                     ([0, 4096], [0, 4096]))
+    self.assertAlmostEqual(CP.lateralTuning.pid.kf, 3.6e-6, delta=1e-12)
+    self._assert_float_sequence(CP.lateralTuning.pid.kfBP, [0., low_max - 1e-3, low_max, 50. * CV.MPH_TO_MS])
+    self._assert_float_sequence(CP.lateralTuning.pid.kfV, [2.4e-6, 1.8e-6, 3.6e-6, 6.0e-6], delta=1e-12)
