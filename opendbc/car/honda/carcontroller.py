@@ -374,7 +374,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         ts = self.frame * DT_CTRL
 
         if self.CP.flags & HondaFlags.BOSCH:
-          if not self.nrdr.replaces_longitudinal and (accel < min_gas) and \
+          if not self.nrdr.replaces_longitudinal and (accel < 1e-3) and \
               (CS.out.vEgo < 3.0) and not (-1e-3 < CS.out.vEgo < 1e-3):
             brake_addon = self.brake_pid.update(error = accel - CS.out.aEgo, speed = CS.out.vEgo)
             targetaccel = min(accel,accel + brake_addon)
@@ -382,14 +382,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             self.brake_pid.reset()
             targetaccel = accel
           else:
-            if (self.brake_pid.i < 0.0) and (accel < min_gas):
+            if self.brake_pid.i < 0.0:
               self.brake_pid.i = min(0.0, self.brake_pid.i + 0.02) # release 1m/s2 @ 50hz
             else:
               self.brake_pid.reset()
             targetaccel = min(accel,accel + self.brake_pid.i)
 
           self.accel = float(np.clip(targetaccel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
-          gas_pedal_force = accel + wind_brake_ms2 * self.windfactor + hill_brake # not using self.accel since pid resets w gas pedal
+          gas_pedal_force = targetaccel + wind_brake_ms2 * self.windfactor + hill_brake
 
           # live-learn gas pedal adjustments when openpilot is controlling gas
           if not self.nrdr.replaces_longitudinal and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
