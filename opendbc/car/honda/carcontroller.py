@@ -389,7 +389,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             targetaccel = min(accel,accel + self.brake_pid.i)
 
           self.accel = float(np.clip(targetaccel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
-          gas_pedal_force = targetaccel + wind_brake_ms2 * self.windfactor + hill_brake
+          raw_gas_pedal_force = targetaccel + wind_brake_ms2 * self.windfactor + hill_brake
+          gas_pedal_force = raw_gas_pedal_force + self.nrdr.gas_alpha
 
           # live-learn gas pedal adjustments when openpilot is controlling gas
           if not self.nrdr.replaces_longitudinal and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
@@ -609,7 +610,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                      CS.scm_ambient_light, self.CP, bus=self.CAN.camera))
 
     new_actuators = actuators.as_builder()
-    new_actuators.speed = self.speed
+    new_actuators.speed = self.nrdr.gas_alpha if self.CP.flags & HondaFlags.BOSCH else self.speed
     new_actuators.accel = self.accel
     new_actuators.gas = float(self.gasfactor)
     new_actuators.brake = float(self.windfactor)

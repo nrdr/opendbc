@@ -302,6 +302,48 @@ class TestNaNReset(unittest.TestCase):
       self.assertTrue(math.isfinite(gf))
       self.assertTrue(math.isfinite(wf))
 
+class TestGasAlpha(unittest.TestCase):
+  def test_initialization_is_finite_and_clamped(self):
+    self.assertEqual(LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH").gasalpha, 0.0)
+    self.assertEqual(LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", -1.0).gasalpha, 0.0)
+    self.assertEqual(LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", 1.0).gasalpha, 0.4)
+    self.assertEqual(LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", float("nan")).gasalpha, 0.0)
+
+  def test_learning_uses_raw_force_window_and_upstream_rate(self):
+    learner = LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", 0.2)
+    learner.update(**_steady_kwargs(accel_cmd=0.5, a_ego=0.4, gas_pedal_force=0.1))
+    self.assertAlmostEqual(learner.gasalpha, 0.2 + 0.1 / 150.0 / 10.0)
+
+  def test_raw_force_window_boundaries_are_strict(self):
+    for raw_force in (-0.5, 0.1):
+      with self.subTest(raw_force=raw_force):
+        learner = LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", 0.2)
+        learner.update(**_steady_kwargs(accel_cmd=0.5, a_ego=0.4,
+                                        gas_pedal_force=raw_force + learner.gasalpha))
+        self.assertEqual(learner.gasalpha, 0.2)
+
+  def test_driver_brake_non_pid_and_standstill_freeze_alpha(self):
+    cases = (
+      {"gas_pressed": True},
+      {"brake_pressed": True},
+      {"long_pid": False},
+      {"long_active": False},
+      {"at_standstill": True, "v_ego": 0.0},
+      {"v_ego": 1.0},
+    )
+    for overrides in cases:
+      with self.subTest(overrides=overrides):
+        learner = LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", 0.2)
+        _tick_n(learner, _LAG_TICKS + 2, accel_cmd=0.5, a_ego=0.4,
+                gas_pedal_force=0.1, **overrides)
+        self.assertEqual(learner.gasalpha, 0.2)
+
+  def test_nonfinite_runtime_state_heals_to_zero(self):
+    learner = LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", 0.2)
+    learner.gasalpha = float("inf")
+    learner.update(**_steady_kwargs())
+    self.assertEqual(learner.gasalpha, 0.0)
+
 
 class TestFingerprintLoadInit(unittest.TestCase):
   """G4: applied factor must initialize at loaded value (no startup transient)."""

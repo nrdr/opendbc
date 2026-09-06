@@ -7,7 +7,7 @@ from opendbc.car import DT_CTRL, rate_limit, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import HONDA_BOSCH
 from opendbc.sunnypilot.car.honda.live_params import get_honda_live_params
-from opendbc.sunnypilot.car.honda.longitudinal import HondaParamWriter, LongGasLearner, load_factors
+from opendbc.sunnypilot.car.honda.longitudinal import HondaParamWriter, LongGasLearner, load_factors, load_gas_alpha
 
 
 def get_param_bool(params, key, default=False):
@@ -64,7 +64,8 @@ class HondaControllerFeatures:
     self._live = {}
 
     gas_factor, wind_factor = load_factors(CP.carFingerprint)
-    self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint)
+    gas_alpha = load_gas_alpha(CP.carFingerprint)
+    self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint, gas_alpha)
 
     self.system_flash_until = 0.0
     self.previous_set_speed = None
@@ -81,6 +82,10 @@ class HondaControllerFeatures:
   @property
   def longitudinal_factors(self):
     return self.learner.gasfactor, self.learner.windfactor
+
+  @property
+  def gas_alpha(self) -> float:
+    return self.learner.gasalpha
 
   def live_tuning(self):
     snapshot = self.params.snapshot
@@ -310,6 +315,7 @@ class HondaControllerFeatures:
 
   def persist(self):
     self.param_writer.put_many({
+      "HondaGasAlphaParams": self.learner.gasalpha,
       "HondaGasFactorParams": self.learner.raw_gasfactor,
       "HondaWindFactorParams": self.learner.raw_windfactor,
     }, self.CP.carFingerprint)
