@@ -52,6 +52,7 @@ FORMER_PARAM_KEYS = (
   "ToyotaEnforceStockLongitudinal",
   "ToyotaStopAndGoHack",
   "HondaGasFactorParams",
+  "HondaGasAlphaParams",
   "HondaWindFactorParams",
   "HondaOverrideFadeDownSecs",
   "HondaOverrideFadeUpSecs",
@@ -115,9 +116,10 @@ def test_typed_provider_boundary_preserves_factor_and_live_snapshot_identity():
   assert provider.enable_gas_interceptor is True
   assert provider.get_live_tuning() is provider.live_tuning
   assert provider.load_longitudinal_factors("HONDA_CLARITY") == (1.0, 1.0)
+  assert provider.load_gas_alpha("HONDA_CLARITY") == 0.0
 
-  provider.persist_longitudinal_factors(1.1, 0.9, "HONDA_CLARITY")
-  assert provider.persisted == [(1.1, 0.9, "HONDA_CLARITY")]
+  provider.persist_longitudinal_state(0.2, 1.1, 0.9, "HONDA_CLARITY")
+  assert provider.persisted == [(0.2, 1.1, 0.9, "HONDA_CLARITY")]
 
 
 def test_generic_interface_override_forwards_the_boundary_without_behavior_changes():

@@ -28,7 +28,8 @@ class HondaControllerFeatures:
     self.config.provider.initialize_live_learning_gas(CP_SP.enableGasInterceptor)
 
     gas_factor, wind_factor = self.config.provider.load_longitudinal_factors(CP.carFingerprint)
-    self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint)
+    gas_alpha = self.config.provider.load_gas_alpha(CP.carFingerprint)
+    self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint, gas_alpha)
 
     self.system_flash_until = 0.0
     self.previous_set_speed = None
@@ -45,6 +46,10 @@ class HondaControllerFeatures:
   @property
   def longitudinal_factors(self):
     return self.learner.gasfactor, self.learner.windfactor
+
+  @property
+  def gas_alpha(self) -> float:
+    return self.learner.gasalpha
 
   def live_tuning(self) -> HondaLiveTuning:
     return self.config.provider.get_live_tuning()
@@ -245,7 +250,8 @@ class HondaControllerFeatures:
     self.sign_change_frames = 0
 
   def persist(self):
-    self.config.provider.persist_longitudinal_factors(
+    self.config.provider.persist_longitudinal_state(
+      self.learner.gasalpha,
       self.learner.raw_gasfactor,
       self.learner.raw_windfactor,
       self.CP.carFingerprint,

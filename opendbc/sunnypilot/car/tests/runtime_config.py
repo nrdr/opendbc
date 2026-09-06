@@ -54,8 +54,12 @@ class StaticHondaConfigProvider:
   def load_longitudinal_factors(self, car_fingerprint: str) -> tuple[float, float]:
     return 1.0, 1.0
 
-  def persist_longitudinal_factors(self, gas_factor: float, wind_factor: float, car_fingerprint: str) -> None:
-    self.persisted.append((gas_factor, wind_factor, car_fingerprint))
+  def load_gas_alpha(self, car_fingerprint: str) -> float:
+    return 0.0
+
+  def persist_longitudinal_state(self, gas_alpha: float, gas_factor: float, wind_factor: float,
+                                 car_fingerprint: str) -> None:
+    self.persisted.append((gas_alpha, gas_factor, wind_factor, car_fingerprint))
 
 
 def make_test_car_config(*, bosch_a_radar: bool = True, honda_stock_longitudinal: bool = False) -> SunnypilotCarConfig:

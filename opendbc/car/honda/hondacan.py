@@ -1,8 +1,9 @@
+import math
+
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD,
-                                      HONDA_BOSCH_RADARLESS, CarControllerParams, HondaFlags)
-from opendbc.sunnypilot.car.honda.can import apply_brake_alert_policy, is_braking, update_acc_hud_values
+from opendbc.car.honda.values import CAR, HONDA_BOSCH_ALT_RADAR, HondaFlags
+from opendbc.sunnypilot.car.honda.can import apply_brake_alert_policy, update_acc_hud_values
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 # CAN bus layout with relay
@@ -79,14 +80,21 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
+def bosch_force_command_state(active: bool, gas_force: float) -> tuple[bool, bool]:
+  """Classify the compensated command once so gas and brake can never overlap."""
+  if not math.isfinite(gas_force):
+    return False, False
+  return active and gas_force > 0.0, active and gas_force < 0.0
+
+
 def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_force):
   commands = []
-  min_gas_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
 
   control_on = 5 if enabled else 0
-  gas_command = gas if active and gas_force > min_gas_accel else -30000
+  gas_active, braking = bosch_force_command_state(active, gas_force)
+  gas_command = gas if gas_active else -30000
   accel_command = accel if active else 0
-  braking = int(is_braking(active, accel))
+  braking = int(braking)
   standstill = 1 if active and stopping_counter > 0 else 0
   standstill_release = 1 if active and stopping_counter == 0 else 0
 

@@ -20,16 +20,20 @@ _FACTOR_FILTER_RC = 7.5
 _FACTOR_FILTER_ALPHA = _LEARNER_DT / (_FACTOR_FILTER_RC + _LEARNER_DT)
 _PITCH_DEADBAND = 0.02
 _BRAKE_ADDON_DEADBAND = 1.0
+_GAS_ALPHA_LO = 0.0
+_GAS_ALPHA_HI = 0.4
 
 
 class LongGasLearner:
-  def __init__(self, init_gasfactor: float, init_windfactor: float, car_fingerprint: str):
+  def __init__(self, init_gasfactor: float, init_windfactor: float, car_fingerprint: str,
+               init_gasalpha: float = 0.0):
     init_gasfactor = self._safe_clamp(init_gasfactor)
     init_windfactor = self._safe_clamp(init_windfactor)
     self.raw_gasfactor = init_gasfactor
     self.raw_windfactor = init_windfactor
     self.gasfactor = init_gasfactor
     self.windfactor = init_windfactor
+    self.gasalpha = self._safe_gasalpha(init_gasalpha)
     self.car_fingerprint = car_fingerprint
     self.last_gas_error = 0.0
     self._accel_deque = deque(maxlen=_LAG_TICKS + 1)
@@ -43,6 +47,12 @@ class LongGasLearner:
     if not math.isfinite(value):
       return 1.0
     return float(np.clip(value, _HARD_LO, _HARD_HI))
+
+  @staticmethod
+  def _safe_gasalpha(value: float) -> float:
+    if not math.isfinite(value):
+      return _GAS_ALPHA_LO
+    return float(np.clip(value, _GAS_ALPHA_LO, _GAS_ALPHA_HI))
 
   @staticmethod
   def _decay_toward_nominal(value: float) -> float:
@@ -88,18 +98,26 @@ class LongGasLearner:
       if conditions_valid:
         gas_error = lagged_accel - a_ego
         self.last_gas_error = float(gas_error)
+        if self.car_fingerprint in ("HONDA_INSIGHT", "HONDA_CIVIC_BOSCH"):
+          learn_speed = 150.0
+        elif self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR"):
+          learn_speed = 300.0
+        else:
+          learn_speed = 50.0
         if gas_error != 0.0 and gas_pedal_force > 0.0:
-          if self.car_fingerprint in ("HONDA_INSIGHT", "HONDA_CIVIC_BOSCH"):
-            learn_speed = 150.0
-          elif self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR"):
-            learn_speed = 300.0
-          else:
-            learn_speed = 50.0
           self.raw_gasfactor = np.clip(
             self.raw_gasfactor + gas_error / learn_speed * gas_pedal_force,
             _HARD_LO,
             _HARD_HI,
           )
+
+        raw_gas_pedal_force = gas_pedal_force - self.gasalpha
+        if gas_error != 0.0 and -0.5 < raw_gas_pedal_force < 0.1 and v_ego > 1.0:
+          self.gasalpha = float(np.clip(
+            self.gasalpha + gas_error / learn_speed / 10.0,
+            _GAS_ALPHA_LO,
+            _GAS_ALPHA_HI,
+          ))
 
         if gas_error != 0.0 and v_ego > 0.0:
           wind_learn_speed = 100.0 if self.car_fingerprint in ("ACURA_RDX_3G", "ACURA_RDX_3G_MMR") else 1000.0
@@ -130,6 +148,7 @@ class LongGasLearner:
       self.raw_windfactor = 1.0
       self.windfactor_before_maxgas = 1.0
       self.windfactor_before_brake = 1.0
+    self.gasalpha = self._safe_gasalpha(self.gasalpha)
 
     self.raw_gasfactor = float(np.clip(self._decay_toward_nominal(self.raw_gasfactor), _HARD_LO, _HARD_HI))
     self.raw_windfactor = float(np.clip(self._decay_toward_nominal(self.raw_windfactor), _HARD_LO, _HARD_HI))

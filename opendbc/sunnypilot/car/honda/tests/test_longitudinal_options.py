@@ -5,6 +5,7 @@ import pytest
 from opendbc.car.honda.values import CAR
 from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures
 from opendbc.sunnypilot.car.honda.gas_interceptor import gas_multiplier
+from opendbc.sunnypilot.car.honda.longitudinal import LongGasLearner
 
 
 def _features(fingerprint):
@@ -36,3 +37,10 @@ def test_roen_limits_remove_only_the_low_speed_pedal_taper():
   assert gas_multiplier(5.0, False) == pytest.approx(0.7)
   assert gas_multiplier(0.0, True) == 1.0
   assert gas_multiplier(10.0, True) == 1.0
+
+
+def test_disabled_live_learning_preserves_gas_alpha():
+  features = _features(CAR.HONDA_CIVIC_BOSCH)
+  features.learner = LongGasLearner(1.0, 1.0, "HONDA_CIVIC_BOSCH", 0.2)
+  features.update_bosch_learner(None, None, None, 0.5, 0.1, 0.0, 0.0, None, False)
+  assert features.gas_alpha == 0.2
