@@ -4,13 +4,27 @@ from opendbc.car import get_safety_config, structs, uds
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HondaSafetyFlags
+from opendbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HondaSafetyFlags, HONDA_BOSCH_A
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
+from openpilot.common.params import Params, UnknownKeyName
 
 TransmissionType = structs.CarParams.TransmissionType
+
+
+def _use_bosch_a_radar(candidate, docs: bool) -> bool:
+  # TODO: remove this toggle+param once the 16-slot Bosch-A decoder (see radar_interface.py) has been
+  # field-validated across all HONDA_BOSCH_A platforms, then make radarUnavailable unconditional here.
+  if candidate not in HONDA_BOSCH_A:
+    return False
+  if docs:
+    return False
+  try:
+    return Params().get_bool("HondaBoschARadar")
+  except UnknownKeyName:
+    return False
 
 
 class CarInterface(CarInterfaceBase):
@@ -48,6 +62,8 @@ class CarInterface(CarInterfaceBase):
       # WARNING: THIS DISABLES AEB!
       # If Bosch radarless, this blocks ACC messages from the camera
       # TODO: get radar disable working on Bosch CANFD
+      if _use_bosch_a_radar(candidate, docs):
+        ret.radarUnavailable = False
       ret.alphaLongitudinalAvailable = not (ret.flags & HondaFlags.BOSCH_CANFD)
       ret.openpilotLongitudinalControl = alpha_long and not (ret.flags & HondaFlags.BOSCH_CANFD)
       ret.pcmCruise = not ret.openpilotLongitudinalControl
