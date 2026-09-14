@@ -3,9 +3,10 @@ import random
 
 import pytest
 
+from opendbc.can import CANPacker
 from opendbc.can.dbc import DBC as DbcFile
 from opendbc.can.parser import get_raw_value
-from opendbc.car import gen_empty_fingerprint, structs
+from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.can_definitions import CanData
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.interface import CarInterface
@@ -21,6 +22,7 @@ from opendbc.car.honda.radar_interface import (
   BOSCH_A_MAIN_IDS,
   BOSCH_A_NUM_SLOTS,
   BOSCH_A_RANGE_RATIO_INVALID,
+  BOSCH_A_RANGE_OFFSET_M,
   BOSCH_A_RANGE_SCALE_M,
   BOSCH_A_STALE_S,
   BOSCH_A_SWEEP_END_MSG,
@@ -31,7 +33,7 @@ from opendbc.car.honda.radar_interface import (
   _bosch_a_range_ratio,
   _bosch_a_range_ratio_vrel,
 )
-from opendbc.car.honda.values import CAR, HONDA_BOSCH_A, HondaSafetyFlags
+from opendbc.car.honda.values import CAR, DBC, HONDA_BOSCH_A, HondaSafetyFlags
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 from opendbc.sunnypilot.car.interfaces import _initialize_honda
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
@@ -157,6 +159,15 @@ def test_no_duplicate_can_ids_across_80_messages():
 
 class TestDbcBitGeometry:
   dbc = DbcFile(BOSCH_A_DBC_NAME)
+
+  @pytest.mark.parametrize('slot', range(BOSCH_A_NUM_SLOTS))
+  def test_all_slot_range_aliases_match_runtime_scale(self, slot):
+    signal = self.dbc.msgs[BOSCH_A_MAIN_IDS[slot][0]].sigs['RANGE']
+    assert signal.factor == BOSCH_A_RANGE_SCALE_M == 0.0625
+    assert signal.offset == BOSCH_A_RANGE_OFFSET_M == -3.0
+    for raw, expected in ((48, 0.0), (208, 10.0), (1000, 59.5), (1648, 100.0), (4094, 252.875)):
+      decoded = get_raw_value(make_f0(range_raw=raw), signal)
+      assert decoded * signal.factor + signal.offset == expected
 
   def test_f0_fields(self):
     msg = self.dbc.msgs[0x280]
@@ -327,13 +338,37 @@ class TestDbcBitGeometry:
 # --- 3. range / azimuth extraction + invalid sentinels ------------------------------------------------
 
 class TestRangeAzimuth:
+  def test_range_scale_matches_firmware_q16_conversion(self):
+    """The range scale is firmware-derived, not capture-fitted.
+
+    Stock 36802TBA AC004 converts the internal object range with (q16 - n) / 128, and the
+    wire-to-internal scaling is q16 = sat16(round(8 * raw_range)). Composing the two gives
+
+        range_m = (8 * raw_range - n) / 128 = raw_range / 16 - n / 128
+
+    so the scale is exactly 1/16 m per raw count and the offset term is a per-unit
+    calibration value, not a constant.
+
+    This test exists because the previous 0.05712 was 16 * 0.00357, and that 0.00357 was
+    solved from a single tape measurement with the offset assumed -- one equation, two
+    unknowns -- which read progressively short with distance. Pin the scale so a future
+    fit against a vision or capture reference cannot silently reintroduce that error.
+    """
+    Q16_PER_RAW_COUNT = 8           # q16 = 8 * raw_range
+    FIRMWARE_Q7_DIVISOR = 128       # AC004's (q16 - n) / 128; Q7 is this firmware's unit
+    assert BOSCH_A_RANGE_SCALE_M == Q16_PER_RAW_COUNT / FIRMWARE_Q7_DIVISOR
+
+    # The *8 exists so a full-scale 12-bit wire value exactly fills the internal int16.
+    # If this ever fails the q16 relation above is wrong and the scale must be re-derived.
+    assert Q16_PER_RAW_COUNT * 0xFFF <= 0x7FFF
+
   def test_range_scale_and_offset(self):
     ri = make_radar_interface()
     raw_range = 1000
     ri.update(sweep(0, 0, 0x7, raw_range, 1024, 1, 0))
     rr = ri.update(sweep(0, 1, 0x7, raw_range, 1024, 3, 50_000_000, with_aux=True,
                         direct_vrel_raw=864, direct_vrel_uncertainty_raw=0))
-    assert rr.points[0].dRel == pytest.approx(0.05712 * raw_range - 3.0)
+    assert rr.points[0].dRel == pytest.approx(BOSCH_A_RANGE_SCALE_M * raw_range + BOSCH_A_RANGE_OFFSET_M)
 
   def test_range_invalid_sentinel_0xfff(self):
     ri = make_radar_interface()
@@ -350,7 +385,7 @@ class TestRangeAzimuth:
     ri.update(sweep(0, 0, 0x7, 1000, 1024 - 100, 1, 0))
     rr = ri.update(sweep(0, 1, 0x7, 1000, 1024 - 100, 3, 50_000_000, with_aux=True,
                         direct_vrel_raw=864, direct_vrel_uncertainty_raw=0))  # raw_angle < center -> right of center
-    d = 0.05712 * 1000 - 3.0
+    d = BOSCH_A_RANGE_SCALE_M * 1000 + BOSCH_A_RANGE_OFFSET_M
     expected_y = d * math.tan(-100.0 / 2048.0)
     assert rr.points[0].yRel == pytest.approx(expected_y)
     assert rr.points[0].yRel < 0
@@ -594,7 +629,7 @@ class TestVrel:
     rr = ri.update(sweep(0, 2, 0x7, 1705, 1024, 5, 118_962_000, with_aux=True,
                    direct_vrel_raw=585, direct_vrel_uncertainty_raw=744))
     assert len(rr.points) == 1
-    assert rr.points[0].dRel == pytest.approx(1705 * BOSCH_A_RANGE_SCALE_M - 3.0)
+    assert rr.points[0].dRel == pytest.approx(1705 * BOSCH_A_RANGE_SCALE_M + BOSCH_A_RANGE_OFFSET_M)
     assert rr.points[0].vRel == pytest.approx(-2.625)
     assert not rr.points[0].deprecated.measured
     assert len(ri._tracks[1].samples) == 2
@@ -684,8 +719,8 @@ class TestVrel:
                     direct_vrel_raw=864, direct_vrel_uncertainty_raw=0))
     rr = ri.update(sweep(0, 1, 0x7, 1010, 1024, 3, 50_000_000, with_aux=True,
                          direct_vrel_raw=864, direct_vrel_uncertainty_raw=0))
-    d1 = 0.05712 * 1000 - 3.0
-    d2 = 0.05712 * 1010 - 3.0
+    d1 = BOSCH_A_RANGE_SCALE_M * 1000 + BOSCH_A_RANGE_OFFSET_M
+    d2 = BOSCH_A_RANGE_SCALE_M * 1010 + BOSCH_A_RANGE_OFFSET_M
     range_implied_vrel = (d2 - d1) / 0.05
     assert range_implied_vrel != pytest.approx(0.0)
     assert rr.points[0].vRel == pytest.approx(0.0)  # native U11 (864 -> 0 m/s), not the range rate
@@ -744,7 +779,7 @@ class TestVrel:
     assert rr is not None
     assert len(rr.points) == 0
     assert len(ri._tracks[23].samples) == 2
-    assert ri._tracks[23].samples[-1][1] == pytest.approx(8.30976)
+    assert ri._tracks[23].samples[-1][1] == pytest.approx(198 * BOSCH_A_RANGE_SCALE_M + BOSCH_A_RANGE_OFFSET_M)
 
 
 # --- 7b. residual vRel-authority fix: raw one-sweep fallback never becomes a published measurement ----
@@ -773,7 +808,10 @@ class TestFallbackNeverPublishes:
                          direct_vrel_raw=BOSCH_A_DIRECT_VREL_INVALID, direct_vrel_uncertainty_raw=0,
                          rawca=BOSCH_A_RANGE_RATIO_INVALID))
     implied_fallback_vrel = (985 - 1000) * BOSCH_A_RANGE_SCALE_M / 0.05
-    assert implied_fallback_vrel == pytest.approx(-17.136)  # confirms the setup would poison, if reached
+    # Confirms the setup would poison if reached, while staying under the generic ceiling so this
+    # exercises the coast path and not range_rejected. Stated as bounds, not a magic number, so a
+    # range-scale change cannot silently invalidate the scenario.
+    assert implied_fallback_vrel < -15.0
     assert abs(implied_fallback_vrel) < BOSCH_A_FALLBACK_RANGE_RATE_MAX_MPS  # and clears range_rejected
     assert len(rr.points) == 1
     assert rr.points[0].deprecated.measured is False
@@ -803,7 +841,7 @@ class TestFallbackNeverPublishes:
     rr = ri.update(sweep(0, 1, 0x7, 1000, 1024, 3, 50_000_000, with_aux=True,
                          direct_vrel_raw=BOSCH_A_DIRECT_VREL_INVALID, direct_vrel_uncertainty_raw=0,
                          rawca=520))
-    d = 0.05712 * 1000 - 3.0
+    d = BOSCH_A_RANGE_SCALE_M * 1000 + BOSCH_A_RANGE_OFFSET_M
     ratio = 0.5 + 0.001 * 520
     residual = abs(d - d * ratio)
     assert residual < 2.0  # clears innovation checking regardless of degraded status
@@ -1095,6 +1133,24 @@ def test_civic_bosch_object_feed_uses_camera_side_acc_can():
 
   assert ri.rcp.bus == can.camera
   assert ri.rcp.bus != can.radar
+
+
+@pytest.mark.parametrize('radar_enabled', (False, True))
+def test_nidec_civic_range_and_velocity_do_not_use_bosch_scale(radar_enabled):
+  cp = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC, make_test_car_config(bosch_a_radar=radar_enabled))
+  ri = CarInterface.RadarInterface(cp, structs.CarParamsSP())
+  assert not ri.bosch_a_radar and ri.rcp.bus == 1
+  packer = CANPacker(DBC[cp.carFingerprint][Bus.radar])
+  frames = [CanData(*packer.make_can_msg(0x400, 1, {'RADAR_STATE': 0x79}))]
+  for address in list(range(0x430, 0x43A)) + list(range(0x440, 0x446)):
+    values = {'LONG_DIST': 42.0 if address == 0x430 else 255.0, 'LAT_DIST': 1.25,
+              'REL_SPEED': -2.0, 'NEW_TRACK': 1}
+    frames.append(CanData(*packer.make_can_msg(address, 1, values)))
+  result = ri.update([(50_000_000, frames)])
+  assert len(result.points) == 1
+  assert result.points[0].dRel == 42.0
+  assert result.points[0].yRel == -1.25
+  assert result.points[0].vRel == -2.0
 
 
 # Computed once at collection time, like CP above -- the openpilot_function_fixture in the root
