@@ -4,18 +4,9 @@ import time
 import numpy as np
 
 from opendbc.car import DT_CTRL, rate_limit, structs
-from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import HONDA_BOSCH
 from opendbc.sunnypilot.car.honda.longitudinal import LongGasLearner
 from opendbc.sunnypilot.car.runtime_config import HondaCarConfig, HondaLiveTuning
-
-
-def torque_lpf_tau(v_ego: float, low_tau: float, standard_tau: float, highway_tau: float) -> float:
-  if v_ego < 25.0 * CV.MPH_TO_MS:
-    return low_tau
-  if v_ego < 50.0 * CV.MPH_TO_MS:
-    return standard_tau
-  return highway_tau
 
 
 class HondaControllerFeatures:
@@ -34,7 +25,6 @@ class HondaControllerFeatures:
     self.system_flash_until = 0.0
     self.previous_set_speed = None
     self.last_cruise_button_time = -1e9
-    self.torque_lpf = 0.0
     self.override_ramp = 1.0
     self.lat_active_previous = False
     self.steering_pressed_filter = 0.0
@@ -125,16 +115,10 @@ class HondaControllerFeatures:
         self.override_ramp = 1.0 if fade_seconds <= 0.0 else min(1.0, self.override_ramp + DT_CTRL / fade_seconds)
 
       torque_command *= self.override_ramp
-      if live.torque_lpf_enabled:
-        tau = torque_lpf_tau(CS.out.vEgo, live.lpf_tau_low, live.lpf_tau_standard, live.lpf_tau_highway)
-        alpha = DT_CTRL / (tau + DT_CTRL)
-        self.torque_lpf = alpha * torque_command + (1.0 - alpha) * self.torque_lpf
-        torque_command = self.torque_lpf
-      else:
-        self.torque_lpf = torque_command
+      # The host filters before publishing CC.actuators.torque. Filtering here
+      # would create a request/output mismatch and spuriously freeze lateral I.
     else:
       self.override_ramp = 0.0
-      self.torque_lpf = 0.0
       self.steering_pressed_filter = 0.0
       self.steering_pressed_previous = False
 
