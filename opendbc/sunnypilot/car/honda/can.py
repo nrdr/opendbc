@@ -1,5 +1,5 @@
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.values import CAR, HONDA_BOSCH, HondaFlags
+from opendbc.car.honda.values import HONDA_BOSCH
 
 
 ALT_SPEED_STOCK = 0
@@ -112,7 +112,8 @@ def update_acc_hud_values(values, CP, enabled, pcm_speed, pcm_accel, hud_control
   else:
     values["PCM_SPEED"] = pcm_speed * CV.MS_TO_KPH
     values["PCM_GAS"] = pcm_accel
-    values["SET_ME_X01"] = speed_control if CP.flags & HondaFlags.HYBRID and CP.carFingerprint == CAR.ACURA_MDX_3G_MMR else 1
+    # Keep the platform controller's launch/rail bit. HUD customization must
+    # not replace MVL's longitudinal command semantics.
     for name in ("FCM_OFF", "FCM_OFF_2", "FCM_PROBLEM", "ICONS"):
       values[name] = 0 if clear_faults else acc_hud[name]
   return values

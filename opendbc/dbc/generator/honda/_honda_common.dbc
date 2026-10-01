@@ -4,7 +4,7 @@ BO_ 145 KINEMATICS_ALT: 8 XXX
  SG_ CHECKSUM : 59|4@0+ (1,0) [0|3] "" EON
 
 BO_ 148 KINEMATICS: 8 XXX
- SG_ LAT_ACCEL : 7|10@0+ (0.02,-512) [-20|20] "m/s2" EON
+ SG_ YAW_RATE : 7|10@0+ (0.25,-128) [-128|127.75] "deg/s" EON
  SG_ LONG_ACCEL : 24|9@0- (-0.02,0) [-20|20] "m/s2" EON
  SG_ CHECKSUM : 59|4@0+ (1,0) [0|3] "" EON
  SG_ COUNTER : 61|2@0+ (1,0) [0|3] "" EON

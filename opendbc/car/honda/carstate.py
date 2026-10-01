@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from collections import defaultdict
 
@@ -46,6 +47,13 @@ class CarState(CarStateBase, CarStateExt):
     self.brake_error_msg = "HYBRID_BRAKE_ERROR" if CP.flags & HondaFlags.HYBRID else "STANDSTILL"
     self.yaw_rate = get_yaw_rate_calibration(CP.carFingerprint)
 
+    if CP.carFingerprint in (CAR.ACURA_MDX_3G, CAR.ACURA_TLX_1G) and not (CP.flags & HondaFlags.HYBRID):
+      self.steer_status_msg = "STEER_STATUS_LEGACY"
+    else:
+      self.steer_status_msg = "STEER_STATUS"
+
+    self.steer_control_active = False  # whether EPS is reacting to steering messages
+
     self.steer_status_values = defaultdict(lambda: "UNKNOWN", can_define.dv["STEER_STATUS"]["STEER_STATUS"])
 
     self.brake_switch_prev = False
@@ -65,6 +73,14 @@ class CarState(CarStateBase, CarStateExt):
 
     self.initial_accFault_cleared = False
     self.initial_accFault_cleared_timer = int(10 / DT_CTRL) # 10 seconds after startup for initial faults to clear
+
+    # Applied gas pedal in PCM units (includes ACC-applied gas, not just driver PEDAL_GAS).
+    # Source message varies by platform: GAS_PEDAL_2 (0x130) or GAS_PEDAL (0x13C).
+    self.car_gas = 0.0
+    self.car_gas_available = False
+    # engine speed, used to distinguish EV/idle-stop from engine-on regimes on hybrids
+    self.engine_rpm = 0.0
+
     self.radar_ref_counter = 0
     self.radar_5hz_tick_counter = 0
     self.radar_5hz_tick = False
@@ -146,7 +162,7 @@ class CarState(CarStateBase, CarStateExt):
 
     ret.seatbeltUnlatched = bool(cp.vl["SEATBELT_STATUS"]["SEATBELT_DRIVER_LAMP"] or not cp.vl["SEATBELT_STATUS"]["SEATBELT_DRIVER_LATCHED"])
 
-    steer_status = self.steer_status_values[cp.vl["STEER_STATUS"]["STEER_STATUS"]]
+    steer_status = self.steer_status_values[cp.vl[self.steer_status_msg]["STEER_STATUS"]]
     ret.steerFaultPermanent = steer_status not in ("NORMAL", "NO_TORQUE_ALERT_1", "NO_TORQUE_ALERT_2", "LOW_SPEED_LOCKOUT", "TMP_FAULT")
     if self.CP.flags & (HondaFlags.BOSCH_ALT_RADAR | HondaFlags.BOSCH_CANFD):
       # TODO: See if this logic works for all other Honda
@@ -157,7 +173,9 @@ class CarState(CarStateBase, CarStateExt):
       # LOW_SPEED_LOCKOUT is not worth a warning
       # NO_TORQUE_ALERT_2 can be caused by bump or steering nudge from driver
       # FIXME: the stock camera stops steering on NO_TORQUE_ALERT_1
-      ret.steerFaultTemporary = steer_status not in ("NORMAL", "LOW_SPEED_LOCKOUT", "TJA_LOW_SPEED_LOCKOUT", "NO_TORQUE_ALERT_2")
+      ret.steerFaultTemporary = steer_status not in ("NORMAL", "LOW_SPEED_LOCKOUT", "NO_TORQUE_ALERT_2")
+
+    self.steer_control_active = bool(cp.vl[self.steer_status_msg]["STEER_CONTROL_ACTIVE"])
 
     if (self.CP.carFingerprint == CAR.ACURA_MDX_4G) and (steer_status == "TJA_LOW_SPEED_LOCKOUT"):
       ret.steerFaultPermanent = False
@@ -172,22 +190,19 @@ class CarState(CarStateBase, CarStateExt):
       self.low_speed_alert = False
     ret.lowSpeedAlert = self.low_speed_alert
 
+    if self.CP.openpilotLongitudinalControl:
+      if self.CP.flags & HondaFlags.BOSCH_RADARLESS:
+        ret.accFaulted = bool(cp.vl["CRUISE_FAULT_STATUS"]["CRUISE_FAULT"])
+      elif self.CP.flags & (HondaFlags.BOSCH_CANFD | HondaFlags.BOSCH_TJA_CONTROL) and (self.CP.flags & HondaFlags.BOSCH_ALT_BRAKE):
+        ret.accFaulted = bool(cp.vl["BRAKE_MODULE"]["CRUISE_FAULT"])
+      else:
+        ret.accFaulted = bool(cp.vl[self.brake_error_msg]["BRAKE_ERROR_1"] or cp.vl[self.brake_error_msg]["BRAKE_ERROR_2"])
+
     # Log non-critical stock ACC/LKAS faults if Nidec (camera) or longitudinal CANFD alt-brake
     if not (self.CP.flags & HondaFlags.BOSCH):
-      ret.carFaultedNonCritical = bool(cp_cam.vl["ACC_HUD"]["ACC_PROBLEM"] or cp_cam.vl["LKAS_HUD"]["LKAS_PROBLEM"])
-
-    elif self.CP.flags & HondaFlags.BOSCH_RADARLESS:
-      ret.accFaulted = bool(cp.vl["CRUISE_FAULT_STATUS"]["CRUISE_FAULT"])
-    else:
-      if self.CP.openpilotLongitudinalControl:
-        if self.CP.flags & (HondaFlags.BOSCH_CANFD | HondaFlags.BOSCH_TJA_CONTROL) and (self.CP.flags & HondaFlags.BOSCH_ALT_BRAKE):
-          ret.accFaulted = bool(cp.vl["BRAKE_MODULE"]["CRUISE_FAULT"])
-        else:
-          ret.accFaulted = bool(cp.vl[self.brake_error_msg]["BRAKE_ERROR_1"] or cp.vl[self.brake_error_msg]["BRAKE_ERROR_2"])
-
-      # Log non-critical stock ACC/LKAS faults if Nidec (camera)
-      if not (self.CP.flags & HondaFlags.BOSCH):
-        ret.carFaultedNonCritical = bool(cp_cam.vl["ACC_HUD"]["ACC_PROBLEM"] or cp_cam.vl["LKAS_HUD"]["LKAS_PROBLEM"])
+      # RLX: the stock LKAS camera is on the steer bus; the bridge panda relays its LKAS_HUD onto the powertrain bus
+      lkas_hud_cp = cp if self.CP.carFingerprint == CAR.ACURA_RLX_HYBRID else cp_cam
+      ret.carFaultedNonCritical = bool(cp_cam.vl["ACC_HUD"]["ACC_PROBLEM"] or lkas_hud_cp.vl["LKAS_HUD"]["LKAS_PROBLEM"])
 
     ret.espDisabled = cp.vl["VSA_STATUS"]["ESP_DISABLED"] != 0
 
@@ -213,7 +228,7 @@ class CarState(CarStateBase, CarStateExt):
 
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
 
-    ret.steeringTorque = cp.vl["STEER_STATUS"]["STEER_TORQUE_SENSOR"]
+    ret.steeringTorque = cp.vl[self.steer_status_msg]["STEER_TORQUE_SENSOR"]
     ret.steeringPressed = self.nrdr.steering_pressed(ret.steeringTorque, ret.steeringAngleDeg)
 
     if self.CP.flags & HondaFlags.BOSCH:
@@ -282,6 +297,18 @@ class CarState(CarStateBase, CarStateExt):
       ret.stockFcw = cp_cam.vl["BRAKE_COMMAND"]["FCW"] != 0
       self.acc_hud = cp_cam.vl["ACC_HUD"]
       self.stock_brake = cp_cam.vl["BRAKE_COMMAND"]
+      # ENGINE_DATA and POWERTRAIN_DATA both carry ENGINE_RPM; MDX 3G hybrid only populates POWERTRAIN_DATA.
+      self.engine_rpm = max(cp.vl["ENGINE_DATA"]["ENGINE_RPM"], cp.vl["POWERTRAIN_DATA"]["ENGINE_RPM"])
+      gas_pedal_2_seen = cp.message_states.get(304) is not None and len(cp.message_states[304].timestamps) > 0
+      gas_pedal_seen = cp.message_states.get(316) is not None and len(cp.message_states[316].timestamps) > 0
+      if gas_pedal_2_seen:
+        self.car_gas_available = True
+        self.car_gas = cp.vl["GAS_PEDAL_2"]["CAR_GAS"]
+      elif gas_pedal_seen:
+        self.car_gas_available = True
+        self.car_gas = cp.vl["GAS_PEDAL"]["CAR_GAS"]
+      else:
+        self.car_gas_available = False
     if self.CP.flags & (HondaFlags.BOSCH_RADARLESS | HondaFlags.BOSCH_CANFD):
       self.lkas_hud = cp_cam.vl["LKAS_HUD"]
     if self.CP.flags & HondaFlags.BOSCH_CANFD:
@@ -373,7 +400,12 @@ class CarState(CarStateBase, CarStateExt):
     return ret, ret_sp
 
   def get_can_parsers(self, CP, CP_SP):
-    pt_messages = []
+    # Optional on Nidec: some platforms send GAS_PEDAL (0x13C) instead of GAS_PEDAL_2 (0x130).
+    # Register before lazy vl access so missing messages do not count against canValid.
+    pt_messages = [("GAS_PEDAL_2", math.nan), ("GAS_PEDAL", math.nan)]
+    if CP.carFingerprint == CAR.ACURA_RLX_HYBRID:
+      # the bridged stock camera LKAS_HUD must stay alive on the powertrain bus
+      pt_messages.append(("LKAS_HUD", 10))
     cam_messages = []
     if self.CP.flags & HondaFlags.BOSCH_CANFD:
       # Radar-alive and relay-open detection for the deferred radar disable (see carcontroller).

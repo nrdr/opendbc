@@ -86,6 +86,9 @@ class CarInterface(CarInterfaceBase):
     if 0x184 in fingerprint[CAN.pt]:
       ret.flags |= HondaFlags.HYBRID.value
 
+    if (ret.flags & HondaFlags.NIDEC) and (ret.flags & HondaFlags.HYBRID) and (0x223 in fingerprint[CAN.pt]):
+      ret.flags |= HondaFlags.HYBRID_ALT_BRAKEHOLD.value
+
     if all(msg not in fingerprint[CAN.pt] for msg in (0x191, 0x1A3)):
       ret.transmissionType = TransmissionType.manual
     elif 0x191 in fingerprint[CAN.pt] and candidate != CAR.ACURA_RDX:
@@ -110,9 +113,15 @@ class CarInterface(CarInterfaceBase):
       else:
         ret.longitudinalActuatorDelay = 0.25 # s, per Bosch A log
     else:
-      # default longitudinal tuning for all Nidec hondas
-      ret.longitudinalTuning.kiBP = [0., 5., 35.]
-      ret.longitudinalTuning.kiV = [1.2, 0.8, 0.5]
+      # Interceptor hardware (0x201 on PT bus) vs wire-gas PCM tuning; enableGasInterceptor is set
+      # from the same fingerprint check in _get_params_sp for any Nidec platform.
+      if 0x201 not in fingerprint[CAN.pt]:
+        # ret.longitudinalTuning.kiBP = [0., 5., 35.]
+        # ret.longitudinalTuning.kiV = [1.2, 0.8, 0.5]
+        pass
+      else:
+        ret.longitudinalTuning.kiBP = [0., 5., 35.]
+        ret.longitudinalTuning.kiV = [1.2, 0.8, 0.5]
 
     # Disable control if EPS mod detected
     for fw in car_fw:
@@ -174,6 +183,7 @@ class CarInterface(CarInterfaceBase):
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       if (ret.flags & HondaFlags.HYBRID):
         CarControllerParams.BOSCH_GAS_LOOKUP_BP = [-0.3, 2.0]
+      ret.wheelSpeedFactor = 1.025
 
     elif candidate == CAR.HONDA_FIT:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
@@ -250,9 +260,10 @@ class CarInterface(CarInterfaceBase):
         ret.minSteerSpeed = 70. * CV.KPH_TO_MS
 
     elif candidate == CAR.ACURA_MDX_4G:
-      ret.steerActuatorDelay = 0.15
-      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 2560, 4209], [0, 2560, 9150]]
-      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 12789], [0, 12789]]
+      ret.steerActuatorDelay = 0.3
+      ret.lateralTuning.pid.kf = 0.000035
+      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.115], [0.052]]
 
     elif candidate == CAR.ACURA_TLX_2G_MMR:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]
@@ -266,9 +277,11 @@ class CarInterface(CarInterfaceBase):
         CAR.HONDA_CLARITY,
         CAR.HONDA_ACCORD_9G,
         CAR.ACURA_MDX_3G,
-        CAR.ACURA_MDX_3G_MMR,
         CAR.ACURA_TLX_1G,
+        CAR.ACURA_RLX_HYBRID,
       ):
+      # lateral tuning for these lives in _get_params_sp; keep the default PID union here so it is
+      # not swapped to torque by the generic branch below
       pass
 
     elif candidate == CAR.HONDA_FIT_4G:
@@ -310,6 +323,8 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[-1].safetyParam |= HondaSafetyFlags.RADARLESS.value
     if ret.flags & HondaFlags.BOSCH_CANFD:
       ret.safetyConfigs[-1].safetyParam |= HondaSafetyFlags.BOSCH_CANFD.value
+    if candidate == CAR.ACURA_RLX_HYBRID:
+      ret.safetyConfigs[-1].safetyParam |= HondaSafetyFlags.RLX_STEER_BRIDGE.value
 
     # min speed to enable ACC. if car can do stop and go, then set enabling speed
     # to a negative value, so it won't matter. Otherwise, add 0.5 mph margin to not
@@ -421,7 +436,7 @@ class CarInterface(CarInterfaceBase):
         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2560], [0, 2560]]
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.8], [0.24]]
 
-    elif candidate in (CAR.ACURA_MDX_3G, CAR.ACURA_MDX_3G_MMR): # source mlocoteta
+    elif candidate == CAR.ACURA_MDX_3G: # source mlocoteta
       stock_cp.autoResumeSng = True
       stock_cp.minEnableSpeed = -1
       stock_cp.steerActuatorDelay = 0.3
@@ -432,19 +447,25 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.ACURA_TLX_1G:
       stock_cp.autoResumeSng = True
       stock_cp.minEnableSpeed = -1
-      # stock_cp.steerActuatorDelay = 0.3
-      # stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 830], [0, 830]]
-      # stock_cp.lateralTuning.pid.kf = 0.000035
-      # stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.115], [0.052]]
-      stock_cp.steerActuatorDelay = 0.15
-      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 830], [0, 830]]
-      CarInterfaceBase.configure_torque_tune(candidate, stock_cp.lateralTuning)
+      stock_cp.steerActuatorDelay = 0.3
+      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 179, 239], [0, 179, 830]]
+      stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0.,20], [0.,20]]
+      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4,0.3], [0,0]]
 
     elif candidate == CAR.HONDA_ACCORD_9G:
       stock_cp.steerActuatorDelay = 0.3
       stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 239], [0, 239]]
       stock_cp.lateralTuning.pid.kiBP, stock_cp.lateralTuning.pid.kpBP = [[0.,20], [0.,20]]
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.4,0.3], [0,0]]
+
+    elif candidate == CAR.ACURA_RLX_HYBRID:
+      # STEERING_CONTROL is bridged to the EPS on the steer bus by a pre-flashed red panda.
+      stock_cp.autoResumeSng = True
+      stock_cp.minEnableSpeed = -1
+      stock_cp.steerActuatorDelay = 0.3
+      stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 32767], [0, 32767]]
+      stock_cp.lateralTuning.pid.kf = 0.000035
+      stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.115], [0.052]]
 
     configure_modified_eps(stock_cp, candidate)
 
