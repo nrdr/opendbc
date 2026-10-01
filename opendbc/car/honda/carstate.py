@@ -9,6 +9,7 @@ from opendbc.car.honda.values import (CAR, DBC, CarControllerParams, CruiseButto
                                       GearShifter, HondaFlags)
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.honda.hud_objects import HudObjectTracker
+from opendbc.car.honda.yaw_rate import get_yaw_rate_calibration
 
 from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
 from opendbc.sunnypilot.car.honda.carstate import HondaCarStateFeatures
@@ -43,6 +44,7 @@ class CarState(CarStateBase, CarStateExt):
       self.car_state_scm_msg = "SCM_BUTTONS"
 
     self.brake_error_msg = "HYBRID_BRAKE_ERROR" if CP.flags & HondaFlags.HYBRID else "STANDSTILL"
+    self.yaw_rate = get_yaw_rate_calibration(CP.carFingerprint)
 
     self.steer_status_values = defaultdict(lambda: "UNKNOWN", can_define.dv["STEER_STATUS"]["STEER_STATUS"])
 
@@ -128,6 +130,9 @@ class CarState(CarStateBase, CarStateExt):
     ret.vEgoRaw = (1. - v_weight) * lowspeed_source * CV.KPH_TO_MS * self.CP.wheelSpeedFactor + v_weight * v_wheel
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
     ret.standstill = lowspeed_source < 1e-5
+    if self.yaw_rate is not None:
+      # Honda VSA reports clockwise-positive deg/s; CarState uses left-positive rad/s.
+      ret.yawRate = -self.yaw_rate.update(cp.vl["KINEMATICS"]["YAW_RATE"], ret.standstill) * CV.DEG_TO_RAD
 
     # doorOpen is true if we can find any door open, but signal locations vary, and we may only see the driver's door
     # TODO: Test the eight Nidec cars without SCM signals for driver's door state, may be able to consolidate further
