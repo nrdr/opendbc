@@ -13,6 +13,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.common.pid import PIDController
 from opendbc.car.honda import lane_path
 from opendbc.car.honda import hud_objects
+from opendbc.car.honda import civic_pcm
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
@@ -230,6 +231,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.lkas_state_change_frames = 0
     self.tja_control = bool(CP.flags & HondaFlags.BOSCH_TJA_CONTROL)
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
+    self.civic_pcm = civic_pcm.uses_civic_pcm(CP, CP_SP)
+    self.pcm_gas_sent = 0
+    self.pcm_gas_previous_sent = 0
+    self.pcm_speed_sent = 0.0
 
     self.braking = False
     self.brake_steady = 0.
@@ -779,12 +784,18 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # and the post-motion lead alone was not enough to break away engine-off.
           speed_lead = self.dv_launch if CS.out.vEgo > 0.1 else self.dv_break
         else:
-          speed_lead = float(sf_eff * self.accel + alpha_eff)
+          # The Civic gas/brake path already applies nidec_pid_factor. Applying
+          # that correction to the speed servo too double-counted an accel
+          # overshoot: a still-positive plan became a speed target below vEgo,
+          # while the gas ceiling was being reduced for the same error.
+          speed_accel = actuators.accel if self.civic_pcm else self.accel
+          speed_lead = float(sf_eff * speed_accel + alpha_eff)
         pcm_speed = float(np.clip(CS.out.vEgo + speed_lead, 0.0, 100.0))
         gas_accel = adjust_accel + wind_brake_ms2 * self.windfactor
         gf_eff = sum(w * self.gas_factors[band] for band, w in gas_w.items())
         ga_eff = sum(w * self.gas_alphas[band] for band, w in gas_w.items())
-        pcm_accel = int(np.clip((ga_eff + gas_accel * gf_eff / 1.44) / max_accel, 0.0, 1.0) * self.params.NIDEC_GAS_MAX)
+        gas_target = float(np.clip((ga_eff + gas_accel * gf_eff / 1.44) / max_accel, 0.0, 1.0) * self.params.NIDEC_GAS_MAX)
+        pcm_accel = gas_target if self.civic_pcm else int(gas_target)
         if pcm_accel > 0:
           pcm_speed = max(pcm_speed, 1.0) # prevent fault by always sending positive speed during gas
       max_speedcontrol = (pcm_speed > 99.999)
@@ -808,8 +819,20 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # When GAS_PEDAL_2 is absent the direct-measurement learner cannot run; use a fixed factor so
       # feedforward stays stable on platforms that do not report applied pedal position.
       effective_average_factor = self.average_factor if CS.car_gas_available else 0.5
-      self.new_accel = int((pcm_accel - self.prior_gas_average * (1 - effective_average_factor)) / effective_average_factor)
-      self.new_accel = int(np.clip(self.new_accel, 0, min(prior_accel + max_increase, self.params.NIDEC_GAS_MAX)))
+      if self.civic_pcm:
+        # Advance the plant model from the held CAN command, never from unsent
+        # 100 Hz intermediates. Invert over the full 10 Hz send interval while
+        # retaining the existing 100 Hz rise envelope for the prepared command.
+        self.prior_gas_average, self.average_factor_sens = civic_pcm.advance_model(
+          self.prior_gas_average, self.average_factor_sens, self.pcm_gas_sent, effective_average_factor,
+        )
+        self.new_accel = civic_pcm.gas_command(
+          pcm_accel, self.prior_gas_average, prior_accel, effective_average_factor,
+          self.gas_recovery_ticks > 0, self.params.NIDEC_GAS_MAX,
+        )
+      else:
+        self.new_accel = int((pcm_accel - self.prior_gas_average * (1 - effective_average_factor)) / effective_average_factor)
+        self.new_accel = int(np.clip(self.new_accel, 0, min(prior_accel + max_increase, self.params.NIDEC_GAS_MAX)))
       if self.launch_active:
         # gas seed: send the learned launch gas immediately (stock jumps to 104-114 in one frame,
         # within its observed +114/frame ramp envelope; ramping from 0 at +2/tick wastes ~0.5s of the
@@ -826,10 +849,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         self.new_accel = int(min(launch_seed, self.params.NIDEC_GAS_MAX))
       # recursive sensitivity of the model prediction to average_factor, advanced with the model itself;
       # used by the average_factor learner below (must be computed before prior_gas_average is updated)
-      self.average_factor_sens = (self.new_accel - self.prior_gas_average) + (1 - effective_average_factor) * self.average_factor_sens
-      self.prior_gas_average = self.prior_gas_average * (1 - effective_average_factor) + (self.new_accel * effective_average_factor)
+      if not self.civic_pcm:
+        self.average_factor_sens = (self.new_accel - self.prior_gas_average) + (1 - effective_average_factor) * self.average_factor_sens
+        self.prior_gas_average = self.prior_gas_average * (1 - effective_average_factor) + (self.new_accel * effective_average_factor)
 
-      if live.live_learning_gas and CC.longActive and (0 < self.new_accel < self.params.NIDEC_GAS_MAX) and (not CS.out.gasPressed) and \
+      gas_wire_for_learning = self.pcm_gas_sent if self.civic_pcm else self.new_accel
+      if live.live_learning_gas and CC.longActive and (0 < gas_wire_for_learning < self.params.NIDEC_GAS_MAX) and (not CS.out.gasPressed) and \
            (self.apply_brake_last == 0) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
         gasfactor_error = (self.accel - CS.out.aEgo)
         # the 0<wire<198 gate above is the gas channel's own observability condition (a pinned
@@ -845,7 +870,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # speed-channel delay line and settled-response filter run every frame, gated or not: the frame the
       # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
       accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
-      self.speed_cmd_hist.append((float(self.accel), self.new_accel >= self.params.NIDEC_GAS_MAX,
+      self.speed_cmd_hist.append((float(actuators.accel if self.civic_pcm else self.accel), gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
                                   (not CS.out.gasPressed) and (self.apply_brake_last == 0) and CC.longActive and
                                   (not self.launch_active) and (self.gas_recovery_ticks == 0)))
       self.a_ego_filt += NIDEC_AEGO_FILTER_ALPHA * (CS.out.aEgo - self.a_ego_filt)
@@ -887,7 +912,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # both the scale EMA and the average_factor fit from an unrelated signal. Launch windows
         # are excluded too: the pedal applies seconds late there, which is not the smoothing
         # constant this model represents.
-        if CC.longActive and (CS.out.vEgo > 1e-5) and CS.car_gas_available and \
+        gas_response_observable = not self.civic_pcm or (
+          0 < self.pcm_gas_sent < self.params.NIDEC_GAS_MAX and
+          self.pcm_speed_sent - CS.out.vEgo > NIDEC_DV_SAT_MIN
+        )
+        if CC.longActive and (CS.out.vEgo > 1e-5) and CS.car_gas_available and gas_response_observable and \
              (CS.engine_rpm > 500) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
           # car_gas_per_pcm_gas learner: direct ratio CAR_GAS / sent PCM_GAS (wire units).
           # Must use the wire command, NOT prior_gas_average: average_factor already nudges
@@ -895,8 +924,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # equilibrium and the scale learner never moves off its boot default (route 3b:
           # HondaCarGasScaleParams stuck at 0.3 for a full drive). Steady-wire gate skips
           # transients where the pedal lags the command.
-          wire_gas = float(self.new_accel)
-          if (wire_gas > 20.0) and (CS.car_gas > 5.0) and (abs(wire_gas - prior_accel) <= 1.0):
+          wire_gas = float(self.pcm_gas_sent if self.civic_pcm else self.new_accel)
+          previous_wire = self.pcm_gas_previous_sent if self.civic_pcm else prior_accel
+          if (wire_gas > 20.0) and (CS.car_gas > 5.0) and (abs(wire_gas - previous_wire) <= 1.0):
             scale_sample = CS.car_gas / wire_gas
             self.car_gas_per_pcm_gas += 0.0005 * (scale_sample - self.car_gas_per_pcm_gas)
 
@@ -1195,6 +1225,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # On Nidec, this also controls longitudinal positive acceleration
           acc_hud_pcm_accel = self.new_accel if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and \
                               not self.CP_SP.enableGasInterceptor and not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL) else pcm_accel
+          if self.civic_pcm:
+            self.pcm_gas_previous_sent = self.pcm_gas_sent
+            self.pcm_gas_sent = int(acc_hud_pcm_accel)
+            self.pcm_speed_sent = pcm_speed
           can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, acc_hud_pcm_accel,
                                                    hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
                                                    self.CP.openpilotLongitudinalControl,
@@ -1241,7 +1275,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         if not (self.CP.flags & HondaFlags.BOSCH):
           self.speed = pcm_speed
           if not self.CP_SP.enableGasInterceptor:
-            self.gas = pcm_accel / self.params.NIDEC_GAS_MAX
+            self.gas = (self.pcm_gas_sent if self.civic_pcm else pcm_accel) / self.params.NIDEC_GAS_MAX
 
     # Render OP's lane and lead car on the dash. On CAN FD these are radar look-alikes that only exist
     # (and are only allowed by panda safety) when the radar is disabled, i.e. openpilot longitudinal;
@@ -1332,8 +1366,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if self.frame % 6000 == 0:
       if self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor:
         self.nrdr.persist()
-      elif live.live_learning_gas and self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and not self.CP_SP.enableGasInterceptor and \
-           not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
+      elif (live.live_learning_gas and self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and
+            not self.CP_SP.enableGasInterceptor and not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL)):
         learned_values = {
           "feedforward": self.average_factor,
           "brake_pid": self.brake_pid_factor_non_lowspeed,
