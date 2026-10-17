@@ -33,10 +33,16 @@ def test_full_brake_authority_preserves_top_end_wind_headroom():
 
 
 def test_roen_limits_remove_only_the_low_speed_pedal_taper():
-  assert gas_multiplier(0.0, False) == pytest.approx(0.4)
-  assert gas_multiplier(5.0, False) == pytest.approx(0.7)
+  assert gas_multiplier(0.0, False) == pytest.approx(0.35)
+  assert gas_multiplier(5.0, False) == pytest.approx(8.0 / 15.0)
   assert gas_multiplier(0.0, True) == 1.0
   assert gas_multiplier(10.0, True) == 1.0
+
+
+@pytest.mark.parametrize("speed,multiplier", [(0.0, 0.35), (3.0, 0.4), (6.0, 0.6), (10.0, 1.0), (35.0, 1.0)])
+def test_measured_interceptor_curve_nodes_and_override(speed, multiplier):
+  assert gas_multiplier(speed, False) == pytest.approx(multiplier)
+  assert gas_multiplier(speed, True) == 1.0
 
 
 def test_disabled_live_learning_preserves_gas_alpha():
