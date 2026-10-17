@@ -14,6 +14,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.honda import lane_path
 from opendbc.car.honda import hud_objects
 from opendbc.car.honda import civic_pcm
+from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
@@ -432,7 +433,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     min_gas = self.params.BOSCH_GAS_LOOKUP_BP[0]
     actuators = CC.actuators
     hud_control = CC.hudControl
-    hud_v_cruise = hud_control.setSpeed / CS.v_cruise_factor if hud_control.speedVisible else 255
+    if self.CP.flags & HondaFlags.BOSCH:
+      hud_v_cruise = hud_control.setSpeed / CS.v_cruise_factor if 0 < CS.out.vCruise < 255 else 255
+    else:
+      hud_v_cruise = hud_control.setSpeed / CS.v_cruise_factor if hud_control.speedVisible else 255
     self.nrdr.update_system_speed_flash(CC, CS, hud_control)
     pcm_cancel_cmd = CC.cruiseControl.cancel
 
@@ -789,7 +793,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # overshoot: a still-positive plan became a speed target below vEgo,
           # while the gas ceiling was being reduced for the same error.
           speed_accel = actuators.accel if self.civic_pcm else self.accel
-          speed_lead = float(sf_eff * speed_accel + alpha_eff)
+          speed_lead = nidec_speed_lead_mps(sf_eff, float(speed_accel), alpha_eff)
         pcm_speed = float(np.clip(CS.out.vEgo + speed_lead, 0.0, 100.0))
         gas_accel = adjust_accel + wind_brake_ms2 * self.windfactor
         gf_eff = sum(w * self.gas_factors[band] for band, w in gas_w.items())
@@ -1016,7 +1020,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                      NIDEC_SPEED_FACTOR_MIN, NIDEC_SPEED_FACTOR_MAX))
             # alpha's cap used to be dv_sat itself, which is self-referential (alpha was inside
             # dv_sat) and pinned alpha at 0.1 on the Pilot once the knee had collapsed
-            self.speed_alphas[band] = float(np.clip(self.speed_alphas[band] + w * 0.001 * speedfactor_error,
+            alpha_delta = w * 0.001 * speedfactor_error
+            # Do not drag alpha down while the current plan is already asking for acceleration:
+            # after lead/brake the lagged error is still negative for ~1 s and was poisoning alpha
+            # into the absorbing hold-speed state described above.
+            current_speed_accel = actuators.accel if self.civic_pcm else self.accel
+            if current_speed_accel > 0.05 and alpha_delta < 0.0:
+              alpha_delta = 0.0
+            self.speed_alphas[band] = float(np.clip(self.speed_alphas[band] + alpha_delta,
                                                     -NIDEC_SPEED_ALPHA_MAX, NIDEC_SPEED_ALPHA_MAX))
         if max_speedcontrol or in_sat: # only allow learning reductions
           # speed-channel saturation is a speed-channel condition. gasfactor/gas_alpha used to

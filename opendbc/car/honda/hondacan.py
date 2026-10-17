@@ -2,7 +2,7 @@ import math
 
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.values import CAR, HONDA_BOSCH_ALT_RADAR, HondaFlags
+from opendbc.car.honda.values import CAR, HondaFlags
 from opendbc.sunnypilot.car.honda.can import apply_brake_alert_policy, update_acc_hud_values
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
@@ -107,8 +107,9 @@ def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_count
   if CP.flags & HondaFlags.BOSCH_RADARLESS:
     acc_control_values.update({
       "CONTROL_ON": enabled,
-      # required whenever braking for Hybrid and Bosch Alt Brake vehicles, allow idle stop after 4 seconds (50 Hz) for other vehicles
-      "COMPUTER_BRAKE_ASSIST": braking if CP.flags & (HondaFlags.HYBRID | HondaFlags.BOSCH_ALT_BRAKE) else stopping_counter > 200,
+      # required whenever braking for Integra, Hybrid and Bosch Alt Brake vehicles, allow idle stop after 4 seconds (50 Hz) for other vehicles
+      "COMPUTER_BRAKE_ASSIST": braking if CP.flags & (HondaFlags.HYBRID | HondaFlags.BOSCH_ALT_BRAKE) or CP.carFingerprint == CAR.ACURA_INTEGRA
+      else stopping_counter > 200,
     })
   else:
     acc_control_values.update({
@@ -244,12 +245,6 @@ def create_lkas_hud(packer, bus, CP, hud_control, lat_active, steering_available
   if not (CP.flags & HondaFlags.BOSCH_EXT_HUD):
     lkas_hud_values['RDM_OFF'] = 1
     lkas_hud_values['LANE_ASSIST_BEEP_OFF'] = 1
-
-  # New HUD concept for selected Bosch cars, overwrites some of the above
-  # TODO: make global across all Honda if feedback is favorable
-  if CP.carFingerprint in HONDA_BOSCH_ALT_RADAR:
-    lkas_hud_values['DASHED_LANES'] = steering_available and lat_active
-    lkas_hud_values['SOLID_LANES'] = lat_active
 
   if CP.flags & HondaFlags.BOSCH_EXT_HUD and not CP.openpilotLongitudinalControl:
     commands.append(packer.make_can_msg('LKAS_HUD_A', bus, lkas_hud_values))

@@ -13,7 +13,8 @@ from opendbc.sunnypilot.car import create_gas_interceptor_command
 
 
 def gas_multiplier(v_ego: float, roen_acceleration_limits: bool) -> float:
-  return 1.0 if roen_acceleration_limits else float(np.interp(v_ego, [0.0, 10.0], [0.4, 1.0]))
+  # MVL's measured ILX pedal gain curve; the explicit NRDR limits override stays unchanged.
+  return 1.0 if roen_acceleration_limits else float(np.interp(v_ego, [0.0, 3.0, 6.0, 10.0], [0.35, 0.4, 0.6, 1.0]))
 
 
 class GasInterceptorCarController:

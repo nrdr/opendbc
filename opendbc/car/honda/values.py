@@ -59,6 +59,7 @@ class HondaSafetyFlags(IntFlag):
   NIDEC_HYBRID = 32
   # RLX: a bridge panda relays the stock camera's LKAS_HUD from the steer bus onto the powertrain bus
   RLX_STEER_BRIDGE = 64
+  NO_ENGINE_DATA_MSG = 128
 
 
 class HondaFlags(IntFlag):
@@ -240,7 +241,7 @@ class CAR(Platforms):
   HONDA_CRV_6G = HondaBoschCANFDPlatformConfig(
     [
       HondaCarDocs("Honda CR-V 2023-26", "All"),
-      HondaCarDocs("Honda CR-V Hybrid 2023-26", "All"),
+      HondaCarDocs("Honda CR-V Hybrid 2023-27", "All"),
     ],
     CarSpecs(mass=1703, wheelbase=2.7, steerRatio=16.2, centerToFrontRatio=0.42),
   )
