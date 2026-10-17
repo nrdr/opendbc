@@ -1,9 +1,9 @@
 import unittest
+from collections import defaultdict
 
 from opendbc.car import DT_CTRL, gen_empty_fingerprint, rate_limit, structs
-from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.interface import CarInterface
-from opendbc.car.honda.values import CAR, HondaFlags, HondaSafetyFlags
+from opendbc.car.honda.values import CAR, CarControllerParams, HondaFlags, HondaSafetyFlags
 
 
 class TestHondaFingerprint(unittest.TestCase):
@@ -13,66 +13,55 @@ class TestHondaFingerprint(unittest.TestCase):
         assert car_model.config.flags & HondaFlags.BOSCH, "Nidec car found with TJA control"
 
   def test_clarity_params(self):
-    def params(version=b""):
+    for version in (b"", b"39990-TRW,A020\0\0", b"39990,TRW,A020\0\0"):
       fw = [structs.CarParams.CarFw(ecu="eps", fwVersion=version)] if version else []
-      return CarInterface.get_params(CAR.HONDA_CLARITY, gen_empty_fingerprint(), fw, False, False, False)
+      cp = CarInterface.get_params(CAR.HONDA_CLARITY, gen_empty_fingerprint(), fw, False, False, False)
+      cp.carFw = fw
+      self.assertTrue(cp.flags & HondaFlags.HYBRID)
+      self.assertEqual(cp.safetyConfigs[-1].safetyParam, HondaSafetyFlags.NIDEC_HYBRID)
+      self.assertFalse(cp.dashcamOnly)
+      self.assertEqual(cp.lateralTuning.which(), "pid")
+      self.assertEqual(CarControllerParams(cp).STEER_MAX, 3840)
 
-    for clarity in (params(), params(b"39990-TRW,A020\x00\x00"), params(b"39990,TRW,A020\x00\x00")):
-      self.assertEqual(clarity.flags & HondaFlags.HYBRID, HondaFlags.HYBRID)
-      self.assertEqual(clarity.safetyConfigs[-1].safetyParam, HondaSafetyFlags.NIDEC_HYBRID)
-      self.assertFalse(clarity.dashcamOnly)
+  def test_modified_admission_is_exact(self):
+    cases = [
+      (CAR.HONDA_CIVIC, b"39990-TEG,A010", True, 3840),
+      (CAR.HONDA_CIVIC, b"39990-TBA,A030", False, 2560),
+      (CAR.HONDA_CIVIC_BOSCH, b"39990-TBA,C020", True, 4096),
+      (CAR.HONDA_CIVIC_BOSCH, b"39990-TBA,C120", False, 4096),
+      (CAR.HONDA_INSIGHT, b"39990-TXM,A040", True, 4096),
+      (CAR.HONDA_CRV_5G, b"39990-TLA,A040", False, 3840),
+      (CAR.HONDA_ACCORD, b"39990-TRW,A020", False, 4096),
+    ]
+    for model, version, admitted, transport in cases:
+      with self.subTest(model=model, version=version):
+        fw = [structs.CarParams.CarFw(ecu="eps", fwVersion=version + b"\0\0")]
+        cp = CarInterface.get_params(model, gen_empty_fingerprint(), fw, False, False, False)
+        cp.carFw = fw
+        self.assertEqual(cp.dashcamOnly, not admitted)
+        self.assertEqual(CarControllerParams(cp).STEER_MAX, transport)
 
-  def test_linear_torque_params(self):
-    cars = {
-      CAR.HONDA_ACCORD: 4096,
-      CAR.HONDA_CIVIC: 3840,
-      CAR.HONDA_CIVIC_BOSCH: 4096,
-      CAR.HONDA_CIVIC_BOSCH_DIESEL: 4096,
-      CAR.HONDA_CLARITY: 3840,
-      CAR.HONDA_CRV_5G: 4096,
-      CAR.HONDA_INSIGHT: 4096,
-    }
-    bp = [0., 25. * CV.MPH_TO_MS - 1e-3, 25. * CV.MPH_TO_MS, 50. * CV.MPH_TO_MS]
-    fw = [structs.CarParams.CarFw(ecu="eps", fwVersion=b"39990-TRW,A020\x00\x00")]
-    for car, steer_max in cars.items():
-      with self.subTest(car=car):
-        cp = CarInterface.get_params(car, gen_empty_fingerprint(), fw, False, False, False)
-        self.assertEqual((list(cp.lateralParams.torqueBP), list(cp.lateralParams.torqueV)), ([0, steer_max], [0, steer_max]))
-        self.assertEqual([round(v, 3) for v in cp.lateralTuning.pid.kpBP], [round(v, 3) for v in bp])
-        self.assertEqual([round(v, 3) for v in cp.lateralTuning.pid.kpV], [.018, .024, .048, .060])
-        self.assertEqual([round(v, 3) for v in cp.lateralTuning.pid.kiBP], [round(v, 3) for v in bp])
-        self.assertEqual([round(v, 3) for v in cp.lateralTuning.pid.kiV], [.006, .008, .016, .020])
-        self.assertFalse(cp.dashcamOnly)
-        self.assertEqual(cp.steerAtStandstill, car != CAR.HONDA_ACCORD)
-        if car != CAR.HONDA_ACCORD:
-          self.assertEqual(cp.minSteerSpeed, -1.)
-    self.assertTrue(CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), fw, False, False, False).dashcamOnly)
+  def test_stock_civic_keeps_stock_gain_and_transport(self):
+    cp = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
+    self.assertAlmostEqual(cp.lateralTuning.pid.kpV[0], 1.1, places=6)
+    self.assertEqual(CarControllerParams(cp).STEER_MAX, 2560)
+    self.assertEqual(cp.minSteerSpeed, 0.)
 
-  def test_linear_torque_filter(self):
-    def controller(car):
-      cp = CarInterface.get_non_essential_params(car)
-      interface = CarInterface(cp)
-      interface.CS.lkas_hud = False
-      interface.CS.out.cruiseState.available = True
-      return interface
-
-    def step(interface, speed, torque=1., lat_active=True):
-      interface.CS.out.vEgo = speed
-      control = structs.CarControl()
-      control.latActive = lat_active
-      control.actuators.torque = torque
-      return interface.apply(control.as_reader(), 0)[0].torque
-
-    low_speed = controller(CAR.HONDA_CIVIC_BOSCH)
-    self.assertAlmostEqual(step(low_speed, 49. * CV.MPH_TO_MS), 1. / 11.)
-    self.assertEqual(step(low_speed, 49. * CV.MPH_TO_MS, lat_active=False), 0.)
-    self.assertAlmostEqual(step(low_speed, 49. * CV.MPH_TO_MS), 1. / 11.)
-
-    high_speed = controller(CAR.HONDA_CIVIC_BOSCH)
-    self.assertAlmostEqual(step(high_speed, 51. * CV.MPH_TO_MS), .5)
-
-    stock = controller(CAR.HONDA_CRV_HYBRID)
+  def test_stock_rate_limit_is_retained_even_for_modified_civic(self):
+    fw = [structs.CarParams.CarFw(ecu="eps", fwVersion=b"39990-TEG,A010\0\0")]
+    cp = CarInterface.get_params(CAR.HONDA_CIVIC, gen_empty_fingerprint(), fw, False, False, False)
+    cp.carFw = fw
+    interface = CarInterface(cp)
+    interface.CS.lkas_hud = False
+    interface.CS.acc_hud = defaultdict(int)
+    interface.CS.stock_brake = defaultdict(int)
+    interface.CS.is_metric = False
+    interface.CS.out.cruiseState.available = True
+    control = structs.CarControl()
+    control.latActive = True
     expected = 0.
-    for torque in (1., 1., -1.):
+    for torque in (1., 1., -1., 0.):
+      control.actuators.torque = torque
       expected = rate_limit(torque, expected, -3. * DT_CTRL, 3. * DT_CTRL)
-      self.assertAlmostEqual(step(stock, 0., torque), expected)
+      output = interface.apply(control.as_reader(), 0)[0].torque
+      self.assertAlmostEqual(output, expected, places=3)
