@@ -75,11 +75,11 @@ class TestHondaPidTune(unittest.TestCase):
 
     torque_limits = {
       CAR.HONDA_CIVIC: 3840,
-      CAR.HONDA_CIVIC_BOSCH: 4096,
+      CAR.HONDA_CIVIC_BOSCH: 3840,
       CAR.HONDA_CIVIC_BOSCH_DIESEL: 4096,
       CAR.HONDA_CLARITY: 3840,
       CAR.HONDA_CRV_5G: 4096,
-      CAR.HONDA_INSIGHT: 4096,
+      CAR.HONDA_INSIGHT: 3840,
     }
     if car_name in torque_limits:
       torque_limit = torque_limits[car_name]

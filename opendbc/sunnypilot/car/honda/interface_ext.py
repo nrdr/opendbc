@@ -13,12 +13,16 @@ TORQUE_MOD_PID_CARS = frozenset({
   CAR.HONDA_INSIGHT,
 })
 
+# 0xE4 per unit of output: the EPS's own command clamp. The Clarity, Civic (Nidec and Bosch) and Insight EPS firmware
+# clamps its command input at key 1663 = E4 3840, stock firmware and PTM builds alike (the PTM builds keep the stock
+# E4 decode; read from the stock TRW, TBA-A030, TEG-A010, TBA-C020, TBA-C120, TGG-A120 and TXM-A040 images), so above
+# 3840 the request did nothing. The CR-V's (TLA) clamps at 1774 = E4 4096.
 _EXTENDED_TORQUE_LIMITS = {
   CAR.HONDA_CLARITY: 3840,
   CAR.HONDA_CIVIC: 3840,
-  CAR.HONDA_CIVIC_BOSCH: 4096,
+  CAR.HONDA_CIVIC_BOSCH: 3840,
   CAR.HONDA_CIVIC_BOSCH_DIESEL: 4096,
-  CAR.HONDA_INSIGHT: 4096,
+  CAR.HONDA_INSIGHT: 3840,
   CAR.HONDA_NBOX_2G: 4096,
   CAR.HONDA_CRV_5G: 4096,
 }
