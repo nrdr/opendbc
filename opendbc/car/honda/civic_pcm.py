@@ -6,6 +6,44 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
 PCM_GAS_TICKS = 10  # ACC_HUD is transmitted at 10 Hz, from a 100 Hz controller.
+REFERENCE_MAX_AGE_NS = 250_000_000
+
+
+def reference_speed(CC_SP, now_nanos: int, requested_accel: float) -> float | None:
+  """Extrapolate a fresh planner speed reference; never reuse stale targets."""
+  age = now_nanos - CC_SP.civicPcmReferenceMonoTime
+  speed = CC_SP.civicPcmReferenceSpeed
+  if (CC_SP.civicPcmReferenceMonoTime <= 0 or not 0 <= age <= REFERENCE_MAX_AGE_NS or
+      not math.isfinite(speed) or not 0.0 <= speed <= 100.0 or not math.isfinite(requested_accel)):
+    return None
+  return min(max(speed + requested_accel * (age / 1e9), 0.0), 100.0)
+
+
+def gas_allowance(requested_accel: float, actual_accel: float, speed_lead: float, maximum: int) -> float:
+  """Legacy-style PCM authority ceiling, not an inverse pedal-position target.
+
+  Leave full authority available while below the speed target. Close to the
+  target, taper only for measured acceleration overshoot; below current speed,
+  taper for speed overshoot too. These are the old override law's 0.3/1.1 m/s2
+  and 0.5/1.0 m/s breakpoints, without its reduced low-speed authority ceiling.
+  Braking/disengagement still zero the command outside this helper.
+  """
+  if not all(math.isfinite(v) for v in (requested_accel, actual_accel, speed_lead)) or requested_accel <= -0.5:
+    # A material slowdown must release propulsion even before brake hysteresis
+    # has ramped far enough to produce its first nonzero brake packet.
+    return 0.0
+  accel_error = actual_accel - requested_accel
+  accel_limiter = 1.0 - 0.9 * min(max((accel_error - 0.3) / 0.8, 0.0), 1.0)
+  # Acceleration overshoot should not starve a car still well below its target.
+  accel_limiter = max(accel_limiter, min(max(speed_lead, 0.0), 1.0))
+  speed_limiter = 1.0 - 0.9 * min(max(-speed_lead / 0.5, 0.0), 1.0)
+  return float(maximum * min(speed_limiter, accel_limiter))
+
+
+def allowance_command(target: float, previous_command: int, recovery: bool, maximum: int) -> int:
+  """Keep the existing rise envelope, without inverse-model undershoot on release."""
+  rise = 7 if recovery and previous_command < target else 2
+  return int(min(max(target, 0.0), min(previous_command + rise, maximum)))
 
 
 def uses_civic_pcm(CP, CP_SP) -> bool:

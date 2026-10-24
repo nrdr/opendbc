@@ -144,6 +144,9 @@ class CarControlSP:
   leadOne: 'LeadData' = field(default_factory=lambda: LeadData())
   leadTwo: 'LeadData' = field(default_factory=lambda: LeadData())
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
+  civicPcmEnabled: bool = auto_field()
+  civicPcmReferenceSpeed: float = auto_field()
+  civicPcmReferenceMonoTime: int = auto_field()
 
   @auto_dataclass
   class Param:
