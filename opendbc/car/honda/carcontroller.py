@@ -14,6 +14,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.honda import lane_path
 from opendbc.car.honda import hud_objects
 from opendbc.car.honda import civic_pcm
+from opendbc.car.honda.nidec_pcm_constraints import NidecPCMConstraints, uses_nidec_pcm
 from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
@@ -234,6 +235,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
     self.civic_pcm = civic_pcm.uses_civic_pcm(CP, CP_SP)
     self.civic_pcm_speed_control = False
+    self.pcm_constraints = NidecPCMConstraints()
+    self.pcm_constraints_washout = 0
+    self.nidec_pcm = uses_nidec_pcm(CP, CP_SP)
     self.pcm_gas_sent = 0
     self.pcm_gas_previous_sent = 0
     self.pcm_speed_sent = 0.0
@@ -435,7 +439,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # The Civic candidate uses PCM_GAS as an allowance. The existing MVL PCM
     # identifiers assume a pedal-position target and must not learn/persist
     # against this different command law. Keep their saved state untouched.
-    pcm_learning = live.live_learning_gas and not self.civic_pcm_speed_control
+    ecu_matched_pcm = live.ecu_matched_long and self.nidec_pcm
+    # After disabling shaping the plant is still answering the previous command
+    # law. Do not teach/persist that response as an unshaped-command calibration.
+    pcm_washout = self.pcm_constraints_washout > 0
+    self.pcm_constraints_washout = NIDEC_SERVO_LAG_FRAMES if ecu_matched_pcm else max(0, self.pcm_constraints_washout - 1)
+    pcm_learning = live.live_learning_gas and not self.civic_pcm_speed_control and not ecu_matched_pcm and not pcm_washout
+    if ecu_matched_pcm or pcm_washout:
+      self.sat_excess_frames = self.sat_deficit_frames = 0
     if self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor:
       self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
     gas_pedal_force = 0.0
@@ -468,13 +479,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # gas servo, so no nidec_pid correction); gas goes out on the interceptor wire
         self.accel = actuators.accel
         accel = self.accel
-        ecu_matched = live.ecu_matched_long and self.CP_SP.enableGasInterceptor
-        accel_cmd = self.nrdr.nidec_accel_command(actuators.accel, ecu_matched)
+        accel_cmd = actuators.accel
         gas, brake = compute_gas_brake(accel_cmd + hill_brake, CS.out.vEgo, self.CP)
         brake = self.nrdr.nidec_brake_authority(
           accel_cmd + hill_brake, brake, CS.out.vEgo, live.full_brake_authority and self.CP_SP.enableGasInterceptor,
         )
-        gas, brake = self.nrdr.nidec_gas_brake(accel_cmd, gas, brake, CS.out.vEgo, ecu_matched)
       elif self.civic_pcm_speed_control:
         # The PCM speed servo already closes the propulsion loop. A second,
         # negative-only acceleration integrator wound through that servo's lag
@@ -499,7 +508,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.accel = actuators.accel + self.nidec_pid_factor
           adjust_accel = self.accel + hill_brake
 
-          if live.live_learning_gas:
+          if pcm_learning:
             # copy wind tuning from Bosch code
             gas_error = self.accel - CS.out.aEgo
             wind_learn_speed = 1000
@@ -546,7 +555,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         else:
           brake, creep_impact = compute_gb_honda_nidec(adjust_accel, CS.out.vEgo, self.creep_factor)
         gas_error = self.accel - CS.out.aEgo
-        if live.live_learning_gas and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.stockAeb) and (not CS.out.gasPressed) \
+        if pcm_learning and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.stockAeb) and (not CS.out.gasPressed) \
                and (1e-5 <= CS.out.vEgo <= CS.out.cruiseState.speed - 2.):
           self.creep_factor = 0.0
           # self.creep_factor = np.clip(self.creep_factor + 0.001 * creep_impact * gas_error, 0.0, 3.0)
@@ -556,7 +565,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       brake = 0.0
       accel = 0.0
       gas, brake = 0.0, 0.0
-      self.nrdr.reset_longitudinal()
+
+    # Shape only the PCM's propulsion feedforward. The raw request still owns
+    # braking, freshness/override releases and the gas-allowance safety gates.
+    pcm_shaped_accel = self.pcm_constraints.update(
+      float(actuators.accel), CS.out.vEgo, enabled=ecu_matched_pcm,
+      active=CC.longActive and not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb),
+      launch=self.launch_active,
+    )
 
     if CC.longActive and not (self.CP.flags & HondaFlags.BOSCH):
       accel = self.accel
@@ -815,7 +831,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # The propulsion gain preserves acceleration headroom, but is not an
           # inverse of the PCM's torque-off/coast response. Keep the planner's
           # falling reference and use only a bounded preview below zero accel.
-          speed_lead = (civic_pcm.speed_target(pcm_reference, float(actuators.accel), sf_eff) - CS.out.vEgo
+          speed_lead = (civic_pcm.speed_target(pcm_reference, pcm_shaped_accel, sf_eff) - CS.out.vEgo
                         if pcm_reference is not None else -CS.out.vEgo)
         else:
           # The Civic gas/brake path already applies nidec_pid_factor. Applying
@@ -823,9 +839,13 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # overshoot: a still-positive plan became a speed target below vEgo,
           # while the gas ceiling was being reduced for the same error.
           speed_accel = actuators.accel if self.civic_pcm else self.accel
+          if ecu_matched_pcm and actuators.accel > 0.0:
+            speed_accel += pcm_shaped_accel - actuators.accel
           speed_lead = nidec_speed_lead_mps(sf_eff, float(speed_accel), alpha_eff)
         pcm_speed = float(np.clip(CS.out.vEgo + speed_lead, 0.0, 100.0))
         gas_accel = adjust_accel + wind_brake_ms2 * self.windfactor
+        if ecu_matched_pcm and actuators.accel > 0.0:
+          gas_accel += pcm_shaped_accel - actuators.accel
         gf_eff = sum(w * self.gas_factors[band] for band, w in gas_w.items())
         ga_eff = sum(w * self.gas_alphas[band] for band, w in gas_w.items())
         gas_target = float(np.clip((ga_eff + gas_accel * gf_eff / 1.44) / max_accel, 0.0, 1.0) * self.params.NIDEC_GAS_MAX)
@@ -919,7 +939,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
       accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
       self.speed_cmd_hist.append((float(actuators.accel if self.civic_pcm else self.accel), gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
-                                  (not CS.out.gasPressed) and (self.apply_brake_last == 0) and CC.longActive and
+                                  not ecu_matched_pcm and (not CS.out.gasPressed) and (self.apply_brake_last == 0) and CC.longActive and
                                   (not self.launch_active) and (self.gas_recovery_ticks == 0)))
       self.a_ego_filt += NIDEC_AEGO_FILTER_ALPHA * (CS.out.aEgo - self.a_ego_filt)
       if pcm_learning and (not CS.out.gasPressed) and (self.apply_brake_last == 0): # adjust speedfactor and average_factor

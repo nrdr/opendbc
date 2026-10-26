@@ -29,9 +29,6 @@ class HondaControllerFeatures:
     self.lat_active_previous = False
     self.steering_pressed_filter = 0.0
     self.steering_pressed_previous = False
-    self.last_accel = 0.0
-    self.last_accel_sign = 0
-    self.sign_change_frames = 0
 
   @property
   def longitudinal_factors(self):
@@ -137,30 +134,6 @@ class HondaControllerFeatures:
     )
     return torque_command, lkas_active
 
-  def nidec_accel_command(self, accel: float, enabled: bool) -> float:
-    if enabled:
-      accel = float(np.clip(accel, self.last_accel - 0.06, self.last_accel + 0.05))
-    self.last_accel = accel
-    return accel
-
-  def nidec_gas_brake(self, accel: float, gas: float, brake: float, v_ego: float, enabled: bool):
-    if not enabled:
-      return gas, brake
-
-    deadband = float(np.interp(v_ego, [2.5, 10.0, 20.0, 30.0], [0.08, 0.06, 0.03, 0.005]))
-    if gas < deadband and brake < deadband:
-      gas = brake = 0.0
-
-    sign = 1 if accel > 0.05 else (-1 if accel < -0.05 else 0)
-    if sign and self.last_accel_sign and sign != self.last_accel_sign:
-      self.sign_change_frames = 20
-    if self.sign_change_frames:
-      gas = brake = 0.0
-      self.sign_change_frames -= 1
-    if sign:
-      self.last_accel_sign = sign
-    return gas, brake
-
   def nidec_brake_authority(self, accel: float, brake: float, v_ego: float, enabled: bool) -> float:
     if not enabled or self.CP.carFingerprint in HONDA_BOSCH:
       return brake
@@ -227,11 +200,6 @@ class HondaControllerFeatures:
       "vehicle_accel": CS.out.aEgo,
       "clear_dash_faults": live.clear_dash_faults,
     }
-
-  def reset_longitudinal(self):
-    self.last_accel = 0.0
-    self.last_accel_sign = 0
-    self.sign_change_frames = 0
 
   def persist(self):
     self.config.provider.persist_longitudinal_state(
