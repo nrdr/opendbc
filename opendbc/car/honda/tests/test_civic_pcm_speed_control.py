@@ -157,3 +157,45 @@ def test_frozen_invalid_gain_fails_closed_without_rewriting_saved_tuning(gain):
   assert gas_packets(messages) == [0]
   assert ci.CC.pcm_speed_sent == 0.
   assert not config.honda.provider.persisted
+
+
+@pytest.mark.parametrize('gain', [1., 4., 4.697697847, 10.915992881, 99.])
+@pytest.mark.parametrize('accel', [0., .01, .1, .2, .5, 1., 2.])
+def test_slowdown_preview_does_not_reduce_positive_acceleration_headroom(gain, accel):
+  assert civic_pcm.speed_target(20., accel, gain) == pytest.approx(min(20. + gain * accel, 100.))
+
+
+@pytest.mark.parametrize('gain', [1., 4., 4.697697847, 10.915992881, 99.])
+def test_gentle_release_does_not_use_the_propulsion_gain_as_a_coasting_inverse(gain):
+  # Highway trigger: a modest negative acceleration must not move a ~60 mph
+  # reference several mph down just because the propulsion identifier is high.
+  assert civic_pcm.speed_target(26.9, -.15, gain) == pytest.approx(26.75)
+  assert civic_pcm.speed_target(26.9, -.15, gain) <= 26.9
+  assert civic_pcm.speed_target(26.9, -.15, gain) >= max(26.9 - .15 * gain, 0.)
+
+
+def test_slowdown_preview_is_continuous_at_zero_and_follows_a_falling_reference_immediately():
+  gain = 10.915992881
+  assert abs(civic_pcm.speed_target(20., 1e-9, gain) - civic_pcm.speed_target(20., -1e-9, gain)) < 2e-8
+  assert civic_pcm.speed_target(19., -.1, gain) == pytest.approx(18.9)
+  assert civic_pcm.speed_target(18., -.1, gain) == pytest.approx(17.9)
+  assert civic_pcm.speed_target(0., -.1, gain) == 0.
+
+
+def test_slowdown_target_can_be_below_actual_speed_without_a_hold_timer():
+  ci, _ = interface()
+  ci.CC.speed_factors = dict.fromkeys(ci.CC.speed_factors, 10.915992881)
+  for tick in range(100):
+    apply(ci, .3, tick)
+  # A mild slowdown still lowers the speed command below vEgo. Only the extra
+  # negative feedforward is bounded; this is not an ego-speed clamp.
+  apply(ci, -.1, 100, speed=19.9)
+  assert ci.CC.pcm_speed_sent == pytest.approx(19.8)
+  assert ci.CC.pcm_speed_sent < ci.CS.out.vEgo
+
+
+@pytest.mark.parametrize('accel', [-.49, -.3, -.1, 0., .1, .5, 2.])
+def test_speed_target_is_monotonic_in_request_and_reference(accel):
+  target = civic_pcm.speed_target(20., accel, 10.915992881)
+  assert civic_pcm.speed_target(20., accel - .001, 10.915992881) <= target
+  assert civic_pcm.speed_target(19.9, accel, 10.915992881) == pytest.approx(target - .1)

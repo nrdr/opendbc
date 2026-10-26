@@ -812,11 +812,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # and the post-motion lead alone was not enough to break away engine-off.
           speed_lead = self.dv_launch if CS.out.vEgo > 0.1 else self.dv_break
         elif self.civic_pcm_speed_control:
-          # Unlike vEgo + a learned zero-accel bias, a planner-linked speed
-          # reference can settle at a fixed target without chasing an overshoot.
-          # Retain the speed-servo feedforward gain for acceleration authority;
-          # its old bias and gas-response inverse do not belong to this law.
-          speed_lead = (pcm_reference + sf_eff * float(actuators.accel) - CS.out.vEgo) if pcm_reference is not None else -CS.out.vEgo
+          # The propulsion gain preserves acceleration headroom, but is not an
+          # inverse of the PCM's torque-off/coast response. Keep the planner's
+          # falling reference and use only a bounded preview below zero accel.
+          speed_lead = (civic_pcm.speed_target(pcm_reference, float(actuators.accel), sf_eff) - CS.out.vEgo
+                        if pcm_reference is not None else -CS.out.vEgo)
         else:
           # The Civic gas/brake path already applies nidec_pid_factor. Applying
           # that correction to the speed servo too double-counted an accel

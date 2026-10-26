@@ -7,6 +7,10 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 PCM_GAS_TICKS = 10  # ACC_HUD is transmitted at 10 Hz, from a 100 Hz controller.
 REFERENCE_MAX_AGE_NS = 250_000_000
+# Candidate preview for gentle slowdowns, not a learned inverse of engine drag.
+# The positive-acceleration servo gain can be >10 s. Reusing it below zero
+# turned a -0.1 m/s2 request into a multi-mph reduction of the PCM target.
+SLOWDOWN_PREVIEW_SECONDS = 1.0
 
 
 def reference_speed(CC_SP, now_nanos: int, requested_accel: float) -> float | None:
@@ -17,6 +21,20 @@ def reference_speed(CC_SP, now_nanos: int, requested_accel: float) -> float | No
       not math.isfinite(speed) or not 0.0 <= speed <= 100.0 or not math.isfinite(requested_accel)):
     return None
   return min(max(speed + requested_accel * (age / 1e9), 0.0), 100.0)
+
+
+def speed_target(reference: float, requested_accel: float, acceleration_gain: float) -> float:
+  """Keep acceleration authority without extrapolating its gain into coasting.
+
+  Positive requests retain the previous feedforward exactly. A negative request
+  previews at most one second of speed loss instead of using the learned
+  propulsion gain as an inverse model of the PCM's very different torque-off
+  response. This is a static, continuous map: no held target, release timer,
+  current-speed floor, or delay of a falling planner reference. Gas/brake and
+  freshness interlocks remain outside this helper and take precedence.
+  """
+  gain = acceleration_gain if requested_accel >= 0.0 else min(acceleration_gain, SLOWDOWN_PREVIEW_SECONDS)
+  return min(max(reference + gain * requested_accel, 0.0), 100.0)
 
 
 def gas_allowance(requested_accel: float, actual_accel: float, speed_lead: float, maximum: int) -> float:
