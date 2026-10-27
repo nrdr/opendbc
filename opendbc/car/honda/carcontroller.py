@@ -14,6 +14,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.honda import lane_path
 from opendbc.car.honda import hud_objects
 from opendbc.car.honda import civic_pcm
+from opendbc.car.honda.civic_pcm_brake import CivicPCMBrakeFeedback
 from opendbc.car.honda.nidec_pcm_constraints import NidecPCMConstraints, uses_nidec_pcm
 from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
 
@@ -234,7 +235,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.tja_control = bool(CP.flags & HondaFlags.BOSCH_TJA_CONTROL)
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
     self.civic_pcm = civic_pcm.uses_civic_pcm(CP, CP_SP)
-    self.civic_pcm_speed_control = False
+    # Select the law from the fixed vehicle configuration, not receipt of the
+    # first SP packet. A live brake request may arrive before that packet.
+    self.civic_pcm_speed_control = self.civic_pcm
     self.pcm_constraints = NidecPCMConstraints()
     self.pcm_constraints_washout = 0
     self.nidec_pcm = uses_nidec_pcm(CP, CP_SP)
@@ -281,6 +284,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
     self.nidec_pid_factor = 0.0
     self.brake_pid_factor = 0.0
+    self.civic_brake_feedback = CivicPCMBrakeFeedback()
 
     self.nidec_pid = PIDController(k_p=([0,], [0,]),
                                    k_i=([0.01, 5., 35.], [1.2, 0.8, 0.5]),
@@ -488,7 +492,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # The PCM speed servo already closes the propulsion loop. A second,
         # negative-only acceleration integrator wound through that servo's lag
         # and could request braking while the host still requested acceleration.
-        # Keep the host request, grade compensation and existing brake feedback.
+        # Keep the host request and grade compensation. Separate brake-only
+        # feedback below can recover from a clipped-zero brake command without
+        # leaking a negative correction into the PCM propulsion target.
         self.nidec_pid.reset()
         self.nidec_pid_factor = 0.0
         self.accel = float(actuators.accel)
@@ -1211,6 +1217,23 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, CC.enabled, CC.longActive, self.accel, self.gas,
                                                           self.stopping_counter, self.CP, gas_pedal_force))
         elif not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
+          civic_brake_allowed = False
+          civic_propulsion_allowed = False
+          previous_brake_effort = self.last_applied_brake
+          if self.civic_pcm_speed_control:
+            # The regulator retains ownership through a rolling stop; a speed
+            # threshold or noisy ECU gas sample must not switch brake laws.
+            requested = float(actuators.accel)
+            downhill_overspeed = (requested + hill_brake < 0.0 and pcm_reference is not None and
+                                  CS.out.vEgo > pcm_reference + 0.1)
+            rolling_feedback = CS.out.vEgo > 2.0 or (self.civic_brake_feedback.active and CS.out.vEgo > 0.1)
+            # The host revokes longActive on a stale acceleration plan. Losing
+            # only the SP speed reference removes gas permission upstream, not
+            # braking authority or ownership of this brake calculation.
+            authority = (CC.longActive and CS.out.canValid and rolling_feedback and
+                         not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or self.launch_active))
+            civic_brake_allowed = authority and (requested <= 0.0 or downhill_overspeed)
+            civic_propulsion_allowed = authority and not civic_brake_allowed
           if self.CP_SP.enableGasInterceptor:
             apply_brake = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live.full_brake_authority)
             apply_brake = int(np.clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
@@ -1218,7 +1241,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             apply_brake = np.clip(self.brake_last - wind_brake, 0.0, 1.0)
             if (apply_brake > 0) and (actuators.longControlState == LongCtrlState.pid) and (CS.out.vEgo > 1e-5) and (not CS.out.stockAeb):
                 if not ((self.accel >= 1e-5) and CS.out.vEgo < 1.0): # don't wind PID at launch lurch
-                  self.brake_pid_factor = self.nidec_brake_pid.update(error = -(self.accel - CS.out.aEgo) * apply_brake, speed = CS.out.vEgo)
+                  self.brake_pid_factor = self.nidec_brake_pid.update(
+                    error=-(self.accel - CS.out.aEgo) * apply_brake, speed=CS.out.vEgo,
+                    freeze_integrator=civic_brake_allowed,
+                  )
             if (CS.out.vEgo >= 2): # save pid above 2m/s
               self.brake_pid_factor_non_lowspeed = self.brake_pid_factor
             if (CS.out.vEgo < 1e-5) and (self.accel < 1e-5): # gradually restore 2m/s pid after stopped
@@ -1228,6 +1254,23 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               apply_brake = min(apply_brake * brakefactor, self.last_applied_brake + 0.00042) / brakefactor
             self.last_applied_brake = apply_brake * brakefactor
             apply_brake = int(np.clip(apply_brake * brakefactor * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
+          if self.civic_pcm_speed_control:
+            maximum = (self.params.NIDEC_BRAKE_MAX - 1) / self.params.NIDEC_BRAKE_MAX
+            # This Civic regulator owns net-deceleration tracking. Its
+            # feedforward is the original acceleration/grade conversion, not
+            # the legacy wind subtraction multiplied by a learned gain. Those
+            # two terms can cancel a needed brake request or ramp the base as
+            # speed falls; the measured feedback accounts for actual road load.
+            brake_feedforward = self.brake_last if civic_brake_allowed else apply_brake / self.params.NIDEC_BRAKE_MAX
+            corrected = self.civic_brake_feedback.update(
+              requested, float(CS.out.aEgo), 0.0 if civic_propulsion_allowed else brake_feedforward,
+              allowed=civic_brake_allowed, saturated=self.apply_brake_last >= self.params.NIDEC_BRAKE_MAX - 1,
+              maximum=maximum, dt=2 * DT_CTRL,
+              stopping=actuators.longControlState == LongCtrlState.stopping, previous=previous_brake_effort,
+            )
+            apply_brake = int(np.clip(corrected * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
+            if civic_brake_allowed or civic_propulsion_allowed:
+              self.last_applied_brake = corrected
           pump_on, self.last_pump_ts = brake_pump_hysteresis(apply_brake, self.apply_brake_last, self.last_pump_ts, ts)
 
           # limit brake release to 32 units per frame to match factory

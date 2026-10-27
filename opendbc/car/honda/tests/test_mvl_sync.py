@@ -18,12 +18,16 @@ def test_only_interceptor_uses_the_new_integral_gain(car):
 def test_civic_positive_plan_keeps_speed_lead_with_poisoned_alpha():
   ci, _ = interface(learning=False)
   ci.CC.speed_alphas = {key: -5.0 for key in ci.CC.speed_alphas}
+  ci.CC.speed_factors = dict.fromkeys(ci.CC.speed_factors, 4.)
   ci.CS.out.aEgo = 0.8
   ci.CC.nidec_pid.i = -0.5
   cc = control(0.4)
-  ci.apply(cc.as_reader(), structs.CarControlSP(), 0)
-  assert ci.CC.accel < 0.0
-  assert ci.CC.pcm_speed_sent - ci.CS.out.vEgo == pytest.approx(0.35, abs=0.01)
+  stamp = 10_000_000_000
+  sp = structs.CarControlSP(civicPcmEnabled=True, civicPcmReferenceSpeed=20., civicPcmReferenceMonoTime=stamp)
+  ci.apply(cc.as_reader(), sp, stamp)
+  assert ci.CC.accel == pytest.approx(.4)
+  assert ci.CC.nidec_pid.i == ci.CC.nidec_pid_factor == 0.
+  assert ci.CC.pcm_speed_sent - ci.CS.out.vEgo == pytest.approx(1.6, abs=0.01)
 
 
 @pytest.mark.parametrize("car,uses_abs", [(CAR.ACURA_INTEGRA, True), (CAR.HONDA_CIVIC_BOSCH, False), (CAR.HONDA_CIVIC, False)])

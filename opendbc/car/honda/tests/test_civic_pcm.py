@@ -125,7 +125,9 @@ def test_existing_launch_seed_and_breakaway_lead_are_preserved(rpm, expected_gas
   ci.CS.out.vEgo = 0.0
   ci.CS.out.standstill = True
   ci.CS.engine_rpm = rpm
-  _, messages = ci.apply(control(0.8).as_reader(), structs.CarControlSP(), 0)
+  stamp = 10_000_000_000
+  sp = structs.CarControlSP(civicPcmEnabled=True, civicPcmReferenceSpeed=0., civicPcmReferenceMonoTime=stamp)
+  _, messages = ci.apply(control(0.8).as_reader(), sp, stamp)
   assert ci.CC.launch_active
   gas = [dat[2] for address, dat, _ in messages if address == 0x30C]
   speed = [int.from_bytes(dat[:2], 'big') * 0.01 / 3.6 for address, dat, _ in messages if address == 0x30C]
@@ -151,8 +153,11 @@ def test_positive_plan_is_not_corrected_twice_in_speed_channel():
   ci.CC.speed_factors = dict.fromkeys(ci.CC.speed_factors, 4.0)
   ci.CC.speed_alphas = dict.fromkeys(ci.CC.speed_alphas, 0.0)
   cc = control(0.3)
-  out, messages = ci.apply(cc.as_reader(), structs.CarControlSP(), 0)
-  assert ci.CC.accel < 0  # The existing gas/brake feedback correction still runs.
+  stamp = 10_000_000_000
+  sp = structs.CarControlSP(civicPcmEnabled=True, civicPcmReferenceSpeed=20., civicPcmReferenceMonoTime=stamp)
+  out, messages = ci.apply(cc.as_reader(), sp, stamp)
+  assert ci.CC.accel == pytest.approx(.3)
+  assert ci.CC.nidec_pid.i == ci.CC.nidec_pid_factor == 0.
   speed = [int.from_bytes(dat[:2], 'big') * 0.01 / 3.6 for address, dat, _ in messages if address == 0x30C]
   assert speed and speed[0] == pytest.approx(21.2, abs=0.003)
   assert out.brake == 0
