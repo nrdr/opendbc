@@ -2,6 +2,7 @@ from opendbc.car.honda.civic_pcm import WindCreditTrial
 from opendbc.car.honda.tests.test_civic_pcm import interface
 from opendbc.car.honda.tests.test_civic_pcm_speed_control import apply
 from opendbc.car.honda.values import CAR
+import pytest
 
 
 def test_recovery_requires_sustained_missing_deceleration_and_real_request():
@@ -43,3 +44,16 @@ def test_no_bench_hook_for_other_command_paths():
   for car, interceptor in [(CAR.HONDA_CLARITY, False), (CAR.HONDA_CIVIC, True), (CAR.HONDA_CIVIC_BOSCH, False)]:
     ci, _ = interface(car, interceptor=interceptor, wind_bench=True)
     assert ci.CC.civic_wind_trial is None
+
+
+@pytest.mark.parametrize("veto", ["stockAeb", "gasPressed", "brakePressed", "canValid", "accFaulted", "positive_speed_lead"])
+def test_trial_never_recovers_brake_during_a_veto(veto):
+  ci, _ = interface(wind_bench=True)
+  ci.CC.windfactor = 2.986
+  cs = ci.CS.out
+  cs.vEgo, cs.aEgo, cs.canValid = 25., -.04, True
+  if veto != "positive_speed_lead":
+    setattr(cs, veto, veto != "canValid")
+  for tick in range(200):
+    apply(ci, -.78, tick, speed=30. if veto == "positive_speed_lead" else 24.)
+    assert ci.CC.civic_wind_trial.extra == 0

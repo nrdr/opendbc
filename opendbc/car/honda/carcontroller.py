@@ -1270,9 +1270,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             apply_brake = int(np.clip(apply_brake * brakefactor * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
             if self.civic_wind_trial is not None:
               eligible = (self.civic_pcm_speed_control and CC.longActive and pcm_reference is not None
-                          and CS.out.canValid and not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb)
+                          and CS.out.canValid and not (CS.out.accFaulted or pcm_cancel_cmd or CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb)
                           and actuators.longControlState == LongCtrlState.pid and CS.out.vEgo > 5.
-                          and self.pcm_gas_sent == 0 and self.new_accel == 0 and wind_brake > 0.)
+                          and self.pcm_gas_sent == 0 and self.new_accel == 0 and wind_brake > 0.
+                          and max(self.pcm_speed_sent, pcm_speed) <= CS.out.vEgo)
               # Don't manufacture a brake request or feed the experiment into the learned gain.
               scale = self.params.NIDEC_BRAKE_MAX
               pre_wind = min(self.brake_last * scale, apply_brake + wind_brake * scale, scale - 1)
