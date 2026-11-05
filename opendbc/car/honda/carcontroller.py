@@ -165,7 +165,9 @@ NIDEC_SPEED_ALPHA_KEYS["high"] = "speed_alpha"
 # 1 (m/s2)/(m/s), i.e. a factor below 1.0, is not a plausible comfort-tuned ACC servo.
 NIDEC_SPEED_FACTOR_DEFAULT = 4.0
 NIDEC_SPEED_FACTOR_MIN = 1.0
-NIDEC_SPEED_FACTOR_MAX = 99.0
+NIDEC_SPEED_FACTOR_MAX = 99.0  # existing Civic reference admission and legacy learner bound
+NIDEC_LIVE_SPEED_FACTOR_MAX = 16.0  # loop-gain bound for observable Nidec PCM learning only
+NIDEC_SET_SPEED_MARGIN = 2.0  # m/s below the stock cruise set speed
 # zero-accel servo offset, m/s; measured -0.18..+0.46 per speed band on the MDX
 NIDEC_SPEED_ALPHA_MAX = 1.5
 # speed-channel ceiling, m/s2; every Nidec PCM sustains at least this on its speed channel
@@ -242,6 +244,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.pcm_constraints = NidecPCMConstraints()
     self.pcm_constraints_washout = 0
     self.nidec_pcm = uses_nidec_pcm(CP, CP_SP)
+    self.guard_pcm_learner = self.nidec_pcm and CP.carFingerprint != CAR.HONDA_CLARITY
     self.pcm_gas_sent = 0
     self.pcm_gas_previous_sent = 0
     self.pcm_speed_sent = 0.0
@@ -456,6 +459,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     pcm_washout = self.pcm_constraints_washout > 0
     self.pcm_constraints_washout = NIDEC_SERVO_LAG_FRAMES if ecu_matched_pcm else max(0, self.pcm_constraints_washout - 1)
     pcm_learning = live.live_learning_gas and not self.civic_pcm_speed_control and not ecu_matched_pcm and not pcm_washout
+    # Near set speed the PCM's own governor, not our request, can be limiting acceleration.
+    governor_start_speed = CS.out.cruiseState.speed - NIDEC_SET_SPEED_MARGIN
+    set_speed_governed = pcm_learning and self.guard_pcm_learner and CS.out.vEgo >= governor_start_speed
     if ecu_matched_pcm or pcm_washout:
       self.sat_excess_frames = self.sat_deficit_frames = 0
     if self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor:
@@ -533,13 +539,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             gas_error = self.accel - CS.out.aEgo
             wind_learn_speed = 1000
             wind_adjust = 1 + wind_brake / wind_learn_speed
-            self.windfactor = np.clip(self.windfactor * (wind_adjust if (gas_error > 0) else 1.0/wind_adjust), 0.1, 3.0)
             gas_pedal_force = self.accel
-            if gas_pedal_force <= 0.0: # don't reduce windfactor while braking, allow increases
-              self.windfactor = max(self.windfactor, self.windfactor_before_brake)
-            else:
-              self.windfactor_before_brake = self.windfactor
-            if CS.out.vEgo < CS.out.cruiseState.speed - 2.:
+            if not set_speed_governed:
+              self.windfactor = np.clip(self.windfactor * (wind_adjust if (gas_error > 0) else 1.0/wind_adjust), 0.1, 3.0)
+              if gas_pedal_force <= 0.0: # don't reduce windfactor while braking, allow increases
+                self.windfactor = max(self.windfactor, self.windfactor_before_brake)
+              else:
+                self.windfactor_before_brake = self.windfactor
+            if CS.out.vEgo < governor_start_speed:
               # drop to max values when not near speed limit
               self.gas_factors = dict(self.gas_factors_nomaxspeed)
               self.gas_alphas = dict(self.gas_alphas_nomaxspeed)
@@ -547,7 +554,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               # don't increase gasfactor nor windfactor at accel max, allow decreases
               for band in self.gas_factors:
                 self.gas_factors[band] = min(self.gas_factors[band], self.gas_factors_before_gasmax[band])
-              self.windfactor = min(self.windfactor, self.windfactor_before_gasmax)
+              if not set_speed_governed:
+                self.windfactor = min(self.windfactor, self.windfactor_before_gasmax)
             else:
               self.gas_factors_before_gasmax = dict(self.gas_factors)
               self.windfactor_before_gasmax = self.windfactor
@@ -576,7 +584,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           brake, creep_impact = compute_gb_honda_nidec(adjust_accel, CS.out.vEgo, self.creep_factor)
         gas_error = self.accel - CS.out.aEgo
         if pcm_learning and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.stockAeb) and (not CS.out.gasPressed) \
-               and (1e-5 <= CS.out.vEgo <= CS.out.cruiseState.speed - 2.):
+               and (1e-5 <= CS.out.vEgo <= governor_start_speed):
           self.creep_factor = 0.0
           # self.creep_factor = np.clip(self.creep_factor + 0.001 * creep_impact * gas_error, 0.0, 3.0)
     else:
@@ -987,7 +995,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # still true (0.15 > 0.1) the reductions-only ratchet made that state absorbing.
         dv_lead = sf_eff * accel_lag
         dv_sat = float(np.clip(sf_eff * self.sat_accel, NIDEC_DV_SAT_MIN, NIDEC_DV_SAT_MAX))
-        in_sat = dv_lead > dv_sat
+        # PCM_SPEED cannot brake below the coast floor: a persistent negative
+        # tracking error there is no more evidence for growth than at the upper knee.
+        speed_channel_pinned = dv_lead > dv_sat or (self.guard_pcm_learner and dv_lead < -NIDEC_DV_SAT_MIN)
 
         # average_factor learner: direct measurement (system ID), not tracking-error integration.
         # average_factor models the PCM's one-pole smoothing of our PCM_GAS commands, and
@@ -1069,7 +1079,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # lag_learn_ok / gas_pinned are the lagged frame's: a brake or launch frame a lag ago is
         # what the car is answering now, whatever this frame looks like.
         lead_maxed = dv_lead > NIDEC_DV_SAT_MAX
-        if lag_learn_ok and gas_pinned and (self.a_ego_filt < self.sat_accel) and \
+        if lag_learn_ok and gas_pinned and not set_speed_governed and (self.a_ego_filt < self.sat_accel) and \
              (lead_maxed or ((dv_lead >= NIDEC_DV_SAT_MIN) and (speedfactor_error_f > 0.1))) and \
              (not CS.out.gasPressed) and (CC.longActive) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
           self.sat_deficit_frames += 1
@@ -1089,7 +1099,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # dead time, not speed-servo response, and it was double-billed — growing/bleeding
         # sf and alpha (sf_low fell 1.27 -> 0.60 across routes 33/34, mostly in these windows).
         # Both the frame being answered (lag_learn_ok) and this one have to be clean.
-        if lag_learn_ok and CC.longActive and (CS.out.vEgo > 1e-5) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
+        if lag_learn_ok and not set_speed_governed and CC.longActive and (CS.out.vEgo > 1e-5) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
           if (speedfactor_error > 0) and (dv_lead > NIDEC_DV_SAT_MAX):
             # beyond DV_SAT_MAX surplus lead provably does nothing, so undershoot there is not
             # growth fuel (that loop is what rode speedfactor to ~511): bleed toward the clip
@@ -1105,9 +1115,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           else:
             sf_growth = 0.001 * speedfactor_error * accel_lag
           # each band learns in proportion to its authority over the sent lead
+          factor_max = NIDEC_LIVE_SPEED_FACTOR_MAX if self.guard_pcm_learner else NIDEC_SPEED_FACTOR_MAX
           for band, w in speed_w.items():
             self.speed_factors[band] = float(np.clip(self.speed_factors[band] * (1 + w * sf_growth),
-                                                     NIDEC_SPEED_FACTOR_MIN, NIDEC_SPEED_FACTOR_MAX))
+                                                     NIDEC_SPEED_FACTOR_MIN, factor_max))
             # alpha's cap used to be dv_sat itself, which is self-referential (alpha was inside
             # dv_sat) and pinned alpha at 0.1 on the Pilot once the knee had collapsed
             alpha_delta = w * 0.001 * speedfactor_error
@@ -1119,7 +1130,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               alpha_delta = 0.0
             self.speed_alphas[band] = float(np.clip(self.speed_alphas[band] + alpha_delta,
                                                     -NIDEC_SPEED_ALPHA_MAX, NIDEC_SPEED_ALPHA_MAX))
-        if max_speedcontrol or in_sat: # only allow learning reductions
+        if max_speedcontrol or speed_channel_pinned: # only allow learning reductions
           # speed-channel saturation is a speed-channel condition. gasfactor/gas_alpha used to
           # be ratcheted here too, which made "pcm_speed at its clip" (68% of low-speed accel
           # frames on route 51, with speedfactor_low pinned at its clamp) forbid the gas target
@@ -1229,7 +1240,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.gas = min(self.gas, max_gas)
           self.bosch_last_gas = self.gas
 
-          stopping = actuators.longControlState == LongCtrlState.stopping
+          stopping = actuators.longControlState == LongCtrlState.stopping and self.accel <= 0.0
           self.stopping_counter = self.stopping_counter + 1 if stopping else 0
           # CAN FD: never overlap the stock radar's own ACC_CONTROL stream; ours starts within a few
           # frames of the radar going silent (see the deferred radar disable above)
@@ -1315,7 +1326,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           if (self.apply_brake_last > 0) and (apply_brake == 0) and CC.longActive and (not self.launch_active):
             self.gas_recovery_ticks = 200
 
-          if CS.out.vEgo < CS.out.cruiseState.speed - 2.:
+          if CS.out.vEgo < governor_start_speed:
             self.gas_factors_nomaxspeed = dict(self.gas_factors)
             self.gas_alphas_nomaxspeed = dict(self.gas_alphas)
           else:
