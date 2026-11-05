@@ -16,6 +16,7 @@ from opendbc.car.honda.values import HondaFlags, HondaSafetyFlags
 from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.subaru.values import SubaruFlags
 from opendbc.car.toyota.values import ToyotaSafetyFlags
+from opendbc.sunnypilot.car.honda.interface_ext import is_rdx_tjb_a220_ptm
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 from opendbc.sunnypilot.car.hyundai.enable_radar_tracks import enable_radar_tracks as hyundai_enable_radar_tracks
 from opendbc.sunnypilot.car.hyundai.longitudinal.helpers import LongitudinalTuningType
@@ -102,6 +103,11 @@ def setup_interfaces(CI, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
   _initialize_radar_tracks(CP, CP_SP, can_recv, can_send)
   _initialize_stop_and_go(CP, CP_SP, config.subaru)
   _initialize_honda(CP, CP_SP, config.honda)
+  # The EPS reply cannot attest the flashed image. Never change the shared PIF scale in get_car
+  # (it supplies CAN callbacks); only an explicit, disconnected bench may exercise this map.
+  if (getattr(config.honda, "rdx_tjb_a220_transport_bench", False) is True and can_recv is None and can_send is None
+      and CP.brand == "honda" and is_rdx_tjb_a220_ptm(CP.carFingerprint, CP.carFw)):
+    CP.lateralParams.torqueBP, CP.lateralParams.torqueV = [[0, 4096], [0, 4096]]
   _initialize_toyota(CP, CP_SP, config.toyota)
 
 

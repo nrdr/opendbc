@@ -60,9 +60,7 @@ def is_rdx_tjb_a220_ptm(candidate, car_fw) -> bool:
 
 def configure_honda_platform(cp: structs.CarParams, candidate, car_fw, docs: bool) -> None:
   _restore_pid_tune(cp, candidate)
-  if is_rdx_tjb_a220_ptm(candidate, car_fw):
-    cp.lateralParams.torqueBP, cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
-  elif candidate == CAR.HONDA_CRV_5G:
+  if candidate == CAR.HONDA_CRV_5G:
     cp.wheelSpeedFactor = 1.0
   elif candidate == CAR.HONDA_PILOT:
     cp.autoResumeSng = True
