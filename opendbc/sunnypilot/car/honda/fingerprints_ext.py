@@ -7,10 +7,15 @@ See the LICENSE.md file in the root directory for more details.
 
 from opendbc.car.structs import CarParams
 from opendbc.car.honda.values import CAR
+from opendbc.sunnypilot.car.honda.values_ext import RDX_TJB_A220_PTM
 
 Ecu = CarParams.Ecu
 
 FW_VERSIONS_EXT = {
+  # 3G already fingerprints its EPS. MMR fingerprints its camera/radar, not its EPS.
+  CAR.ACURA_RDX_3G: {
+    (Ecu.eps, 0x18da30f1, None): [RDX_TJB_A220_PTM],
+  },
   CAR.HONDA_ACCORD: {
     (Ecu.eps, 0x18da30f1, None): [
       b'39990-TVA,A150\x00\x00',

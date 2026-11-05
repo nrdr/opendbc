@@ -1,6 +1,7 @@
 from opendbc.car import structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import CAR
+from opendbc.sunnypilot.car.honda.values_ext import RDX_TJB_A220_PTM
 
 
 TORQUE_MOD_PID_CARS = frozenset({
@@ -49,9 +50,19 @@ def _restore_pid_tune(cp: structs.CarParams, candidate) -> None:
     cp.lateralTuning.pid.kpV, cp.lateralTuning.pid.kiV = [[0.8], [0.24]]
 
 
+def is_rdx_tjb_a220_ptm(candidate, car_fw) -> bool:
+  if candidate not in (CAR.ACURA_RDX_3G, CAR.ACURA_RDX_3G_MMR):
+    return False
+  # Ignore logging-only serial queries. Missing or conflicting image replies must not select this scale.
+  images = {(fw.address, fw.subAddress, fw.fwVersion) for fw in car_fw if fw.ecu == "eps" and not fw.logging}
+  return images == {(0x18DA30F1, 0, RDX_TJB_A220_PTM)}
+
+
 def configure_honda_platform(cp: structs.CarParams, candidate, car_fw, docs: bool) -> None:
   _restore_pid_tune(cp, candidate)
-  if candidate == CAR.HONDA_CRV_5G:
+  if is_rdx_tjb_a220_ptm(candidate, car_fw):
+    cp.lateralParams.torqueBP, cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
+  elif candidate == CAR.HONDA_CRV_5G:
     cp.wheelSpeedFactor = 1.0
   elif candidate == CAR.HONDA_PILOT:
     cp.autoResumeSng = True

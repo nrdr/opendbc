@@ -8,6 +8,9 @@ See the LICENSE.md file in the root directory for more details.
 from enum import IntFlag
 
 
+RDX_TJB_A220_PTM = b"39990-TJB,A220\x00\x00"
+
+
 class HondaFlagsSP(IntFlag):
   NIDEC_HYBRID = 1
   EPS_MODIFIED = 2
