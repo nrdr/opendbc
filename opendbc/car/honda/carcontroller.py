@@ -18,6 +18,7 @@ from opendbc.car.honda import clarity_braking
 from opendbc.car.honda.nidec_pcm_constraints import NidecPCMConstraints, uses_nidec_pcm
 from opendbc.car.honda.nidec_ecu_matched import EcuMatchedPCM
 from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
+from opendbc.car.honda.engine_braking import EngineBrakeFade, fresh_context
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
@@ -248,6 +249,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.pcm_constraints = NidecPCMConstraints()
     self.ecu_constraints = EcuMatchedPCM()
     self.pcm_constraints_washout = 0
+    self.engine_brake_fade = EngineBrakeFade()
+    self.engine_brake_washout = 0
+    self.engine_brake_wire_shaped = False
     self.guard_pcm_learner = self.nidec_pcm
     self.pcm_gas_sent = 0
     self.pcm_gas_previous_sent = 0
@@ -463,12 +467,17 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # After disabling shaping the plant is still answering the previous command
     # law. Do not teach/persist that response as an unshaped-command calibration.
     pcm_washout = self.pcm_constraints_washout > 0
+    engine_context = civic_pcm.uses_civic_pcm(self.CP, self.CP_SP) and fresh_context(CC_SP, now_nanos)
+    engine_busy = self.engine_brake_fade.weight > 0 or (engine_context and CC_SP.pcmEngineBrakeRequest)
+    self.engine_brake_washout = NIDEC_SERVO_LAG_FRAMES if engine_busy or self.engine_brake_wire_shaped else max(0, self.engine_brake_washout - 1)
+    engine_observing = self.engine_brake_washout > 0
     self.pcm_constraints_washout = NIDEC_SERVO_LAG_FRAMES if experimental_shaping else max(0, self.pcm_constraints_washout - 1)
-    pcm_learning = live.live_learning_gas and not self.civic_pcm_speed_control and not experimental_shaping and not pcm_washout and not self.ecu_matched_pcm
+    pcm_learning = (live.live_learning_gas and not self.civic_pcm_speed_control and not experimental_shaping and
+                    not pcm_washout and not self.ecu_matched_pcm and self.engine_brake_washout == 0)
     # Near set speed the PCM's own governor, not our request, can be limiting acceleration.
     governor_start_speed = CS.out.cruiseState.speed - NIDEC_SET_SPEED_MARGIN
     set_speed_governed = pcm_learning and self.guard_pcm_learner and CS.out.vEgo >= governor_start_speed
-    if experimental_shaping or pcm_washout:
+    if experimental_shaping or pcm_washout or engine_observing:
       self.sat_excess_frames = self.sat_deficit_frames = 0
     if self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor:
       self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
@@ -943,7 +952,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # When GAS_PEDAL_2 is absent the direct-measurement learner cannot run; use a fixed factor so
       # feedforward stays stable on platforms that do not report applied pedal position.
       effective_average_factor = self.average_factor if CS.car_gas_available else 0.5
-      if self.civic_pcm:
+      if self.civic_pcm or engine_observing:
         # Both Civic laws retain a held-wire observer. Only the compatibility
         # path inverts it; an authority ceiling is not a pedal-position target.
         self.prior_gas_average, self.average_factor_sens = civic_pcm.advance_model(
@@ -953,11 +962,16 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.new_accel = civic_pcm.allowance_command(
             pcm_accel, prior_accel, self.gas_recovery_ticks > 0, self.params.NIDEC_GAS_MAX,
           )
-        else:
+        elif self.civic_pcm:
           self.new_accel = civic_pcm.gas_command(
             pcm_accel, self.prior_gas_average, prior_accel, effective_average_factor,
             self.gas_recovery_ticks > 0, self.params.NIDEC_GAS_MAX,
           )
+        else:
+          # Keep MVL's mapping/rise limit, but observe the command actually
+          # held on CAN while the optional coast fade owns the final output.
+          self.new_accel = int((pcm_accel - self.prior_gas_average * (1 - effective_average_factor)) / effective_average_factor)
+          self.new_accel = int(np.clip(self.new_accel, 0, min(prior_accel + max_increase, self.params.NIDEC_GAS_MAX)))
       else:
         self.new_accel = int((pcm_accel - self.prior_gas_average * (1 - effective_average_factor)) / effective_average_factor)
         self.new_accel = int(np.clip(self.new_accel, 0, min(prior_accel + max_increase, self.params.NIDEC_GAS_MAX)))
@@ -987,11 +1001,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         pcm_accel = 0
         pcm_speed = float(CS.out.vEgo)
 
-      if not self.civic_pcm:
+      if not self.civic_pcm and not engine_observing:
         self.average_factor_sens = (self.new_accel - self.prior_gas_average) + (1 - effective_average_factor) * self.average_factor_sens
         self.prior_gas_average = self.prior_gas_average * (1 - effective_average_factor) + (self.new_accel * effective_average_factor)
 
-      gas_wire_for_learning = self.pcm_gas_sent if self.civic_pcm else self.new_accel
+      gas_wire_for_learning = self.pcm_gas_sent if self.civic_pcm or engine_observing else self.new_accel
       if pcm_learning and CC.longActive and (0 < gas_wire_for_learning < self.params.NIDEC_GAS_MAX) and (not CS.out.gasPressed) and \
            (self.apply_brake_last == 0) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
         gasfactor_error = (self.accel - CS.out.aEgo)
@@ -1009,7 +1023,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
       accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
       self.speed_cmd_hist.append((float(actuators.accel if self.civic_pcm else self.accel), gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
-                                  not experimental_shaping and (not CS.out.gasPressed) and (self.apply_brake_last == 0) and CC.longActive and
+                                  not experimental_shaping and not engine_observing and (not CS.out.gasPressed) and (self.apply_brake_last == 0) and CC.longActive and
                                   (not self.launch_active) and (self.gas_recovery_ticks == 0)))
       self.a_ego_filt += NIDEC_AEGO_FILTER_ALPHA * (CS.out.aEgo - self.a_ego_filt)
       if pcm_learning and (not CS.out.gasPressed) and (self.apply_brake_last == 0): # adjust speedfactor and average_factor
@@ -1375,6 +1389,20 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.apply_brake_last = apply_brake
           self.brake = (brake_fraction if clarity_long else 0.0) if clarity_pedal else apply_brake / self.params.NIDEC_BRAKE_MAX
 
+    engine_pcm_gas = self.new_accel
+    if civic_pcm.uses_civic_pcm(self.CP, self.CP_SP):
+      # Last propulsion-only stage: never subtract from, delay, or replace a
+      # brake request. Overrides and lead acquisition bypass the comfort fade.
+      permitted = (engine_context and CC.longActive and CS.out.canValid and not CS.out.accFaulted and
+                   actuators.longControlState == LongCtrlState.pid and not self.launch_active and
+                   self.brake_last <= 0 and self.apply_brake_last == 0 and
+                   not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or pcm_cancel_cmd or
+                        CC_SP.leadOne.status or CC_SP.leadTwo.status))
+      pcm_speed, engine_pcm_gas = self.engine_brake_fade.apply(
+        pcm_speed, self.new_accel, now_nanos=now_nanos, permitted=permitted,
+        request=bool(CC_SP.pcmEngineBrakeRequest),
+      )
+
     # Send dashboard UI commands. On CAN FD, ACC_HUD is a radar/ADAS look-alike that openpilot only
     # owns when it has disabled the radar (op longitudinal); in stock ACC the real system sends it and
     # the non-long safety config doesn't allowlist it.
@@ -1389,12 +1417,13 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       if self.CP.openpilotLongitudinalControl:
         if not (self.CP.flags & HondaFlags.BOSCH_CANFD):
           # On Nidec, this also controls longitudinal positive acceleration
-          acc_hud_pcm_accel = self.new_accel if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and \
+          acc_hud_pcm_accel = engine_pcm_gas if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and \
                               not self.CP_SP.enableGasInterceptor and not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL) else pcm_accel
-          if self.civic_pcm:
+          if civic_pcm.uses_civic_pcm(self.CP, self.CP_SP):
             self.pcm_gas_previous_sent = self.pcm_gas_sent
             self.pcm_gas_sent = int(acc_hud_pcm_accel)
             self.pcm_speed_sent = pcm_speed
+            self.engine_brake_wire_shaped = self.engine_brake_fade.weight > 0
           can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, acc_hud_pcm_accel,
                                                    hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
                                                    self.CP.openpilotLongitudinalControl,
@@ -1446,7 +1475,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         if not (self.CP.flags & HondaFlags.BOSCH):
           self.speed = pcm_speed
           if not self.CP_SP.enableGasInterceptor:
-            self.gas = (self.pcm_gas_sent if self.civic_pcm else pcm_accel) / self.params.NIDEC_GAS_MAX
+            self.gas = (self.pcm_gas_sent if self.civic_pcm or engine_observing else pcm_accel) / self.params.NIDEC_GAS_MAX
 
     # Render OP's lane and lead car on the dash. On CAN FD these are radar look-alikes that only exist
     # (and are only allowed by panda safety) when the radar is disabled, i.e. openpilot longitudinal;

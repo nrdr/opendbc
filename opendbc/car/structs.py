@@ -147,6 +147,9 @@ class CarControlSP:
   civicPcmEnabled: bool = auto_field()
   civicPcmReferenceSpeed: float = auto_field()
   civicPcmReferenceMonoTime: int = auto_field()
+  pcmEngineBrakeAllowed: bool = auto_field()
+  pcmEngineBrakeRequest: bool = auto_field()
+  pcmEngineBrakeMonoTime: int = auto_field()
 
   @auto_dataclass
   class Param:
