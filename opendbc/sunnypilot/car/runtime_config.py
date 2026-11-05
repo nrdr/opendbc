@@ -60,6 +60,7 @@ class HondaCarConfig:
   enforce_stock_longitudinal: bool
   provider: HondaConfigProvider
   clarity_interceptor_brake_bench: bool = False
+  civic_pcm_wind_credit_bench: bool = False  # Off-device test injection only; not a driver setting.
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,8 +14,10 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 
-def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False):
+def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False):
   config = make_test_car_config()
+  if wind_bench:
+    config = replace(config, honda=replace(config.honda, civic_pcm_wind_credit_bench=True))
   config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, live_learning_gas=learning)
   fingerprint = {i: {} for i in range(7)}
   if interceptor:

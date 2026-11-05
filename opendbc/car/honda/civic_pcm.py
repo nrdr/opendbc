@@ -13,6 +13,33 @@ REFERENCE_MAX_AGE_NS = 250_000_000
 SLOWDOWN_PREVIEW_SECONDS = 1.0
 
 
+class WindCreditTrial:
+  """Bench-only: return some discarded brake demand when coasting isn't delivering it.
+
+  Output is an additional wire count, not a pressure estimate. The limits are
+  experiment bounds, not a measured Civic brake calibration.
+  """
+  def __init__(self):
+    self.last_ns = 0
+    self.seconds = 0.
+    self.extra = 0.
+
+  def update(self, now_ns, eligible, demand, measured, pre_wind_counts, base_counts):
+    dt = (now_ns - self.last_ns) * 1e-9
+    self.last_ns = now_ns
+    if (not eligible or not 0. < dt <= .05 or not all(math.isfinite(x) for x in
+        (demand, measured, pre_wind_counts, base_counts)) or demand >= 0.):
+      self.seconds = self.extra = 0.
+      return 0
+    # Act only on a sustained tracking deficit, not merely a negative plan.
+    deficit = measured - demand
+    self.seconds = min(1., self.seconds + dt) if deficit > .20 else 0.
+    headroom = max(0., pre_wind_counts - base_counts)
+    target = min(12., 12. * max(0., deficit - .20), headroom) if self.seconds >= .5 else 0.
+    self.extra = min(headroom, max(self.extra - 8. * dt, min(self.extra + 4. * dt, target)))
+    return int(self.extra)
+
+
 def reference_speed(CC_SP, now_nanos: int, requested_accel: float) -> float | None:
   """Extrapolate a fresh planner speed reference; never reuse stale targets."""
   age = now_nanos - CC_SP.civicPcmReferenceMonoTime

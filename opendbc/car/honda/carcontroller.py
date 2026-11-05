@@ -235,6 +235,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.tja_control = bool(CP.flags & HondaFlags.BOSCH_TJA_CONTROL)
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
     self.civic_pcm = civic_pcm.uses_civic_pcm(CP, CP_SP)
+    self.civic_wind_trial = civic_pcm.WindCreditTrial() if self.civic_pcm and config.civic_pcm_wind_credit_bench else None
     self.keep_pcm_acc = clarity_braking.qualified(CP, CP_SP)
     self.clarity_hold = clarity_braking.StandstillHold()
     self.civic_pcm_speed_control = False
@@ -1256,6 +1257,15 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               apply_brake = min(apply_brake * brakefactor, self.last_applied_brake + 0.00042) / brakefactor
             self.last_applied_brake = apply_brake * brakefactor
             apply_brake = int(np.clip(apply_brake * brakefactor * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
+            if self.civic_wind_trial is not None:
+              eligible = (self.civic_pcm_speed_control and CC.longActive and pcm_reference is not None
+                          and CS.out.canValid and not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb)
+                          and actuators.longControlState == LongCtrlState.pid and CS.out.vEgo > 5.
+                          and self.pcm_gas_sent == 0 and self.new_accel == 0 and wind_brake > 0.)
+              # Don't manufacture a brake request or feed the experiment into the learned gain.
+              scale = self.params.NIDEC_BRAKE_MAX
+              pre_wind = min(self.brake_last * scale, apply_brake + wind_brake * scale, scale - 1)
+              apply_brake += self.civic_wind_trial.update(now_nanos, eligible, actuators.accel, CS.out.aEgo, pre_wind, apply_brake)
           pump_on, self.last_pump_ts = brake_pump_hysteresis(apply_brake, self.apply_brake_last, self.last_pump_ts, ts)
 
           # limit brake release to 32 units per frame to match factory
