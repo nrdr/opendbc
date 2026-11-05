@@ -1023,8 +1023,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
       accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
       self.speed_cmd_hist.append((float(actuators.accel if self.civic_pcm else self.accel), gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
-                                  not experimental_shaping and not engine_observing and (not CS.out.gasPressed) and (self.apply_brake_last == 0) and CC.longActive and
-                                  (not self.launch_active) and (self.gas_recovery_ticks == 0)))
+                                  not experimental_shaping and not engine_observing and (not CS.out.gasPressed) and
+                                  (self.apply_brake_last == 0) and CC.longActive and (not self.launch_active) and (self.gas_recovery_ticks == 0)))
       self.a_ego_filt += NIDEC_AEGO_FILTER_ALPHA * (CS.out.aEgo - self.a_ego_filt)
       if pcm_learning and (not CS.out.gasPressed) and (self.apply_brake_last == 0): # adjust speedfactor and average_factor
         # errors are against the lagged command (see NIDEC_SERVO_LAG_FRAMES); the raw error drives the
