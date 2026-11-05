@@ -59,6 +59,7 @@ class HondaCarConfig:
   bosch_a_radar: bool
   enforce_stock_longitudinal: bool
   provider: HondaConfigProvider
+  clarity_interceptor_brake_bench: bool = False
 
 
 @dataclass(frozen=True, slots=True)

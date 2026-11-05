@@ -494,7 +494,8 @@ class CarInterface(CarInterfaceBase):
           len(stock_cp.safetyConfigs) == 1 and stock_cp.safetyConfigs[0].safetyModel == structs.CarParams.SafetyModel.hondaNidec and
           stock_cp.safetyConfigs[0].safetyParam == 0 and stock_cp.openpilotLongitudinalControl and
           not (docs or stock_cp.passive or stock_cp.dashcamOnly or ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL)):
-        ret.safetyParam |= HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE
+        # Detect the hardware here; detection alone must not select the development calibration.
+        ret.flags |= HondaFlagsSP.CLARITY_INTERCEPTOR_BRAKE_CAPABLE
 
     stock_cp.autoResumeSng = stock_cp.autoResumeSng or ret.enableGasInterceptor
     stock_cp.minEnableSpeed = -1. if ret.enableGasInterceptor else stock_cp.minEnableSpeed

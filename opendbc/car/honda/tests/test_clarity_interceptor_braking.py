@@ -25,6 +25,7 @@ class Rig:
   def __init__(self, car=CAR.HONDA_CLARITY, *, interceptor=True, hybrid=True, stock=False, full_authority=True,
                dashboard_speed=0, alter_params=None):
     config = make_test_car_config(honda_stock_longitudinal=stock)
+    config = replace(config, honda=replace(config.honda, clarity_interceptor_brake_bench=True))
     provider = config.honda.provider
     provider.live_tuning = replace(provider.live_tuning, live_learning_gas=False, full_brake_authority=full_authority,
                                    alt_dashboard_speed=dashboard_speed)

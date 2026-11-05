@@ -15,7 +15,7 @@ from opendbc.car.structs import CarParams
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.honda.values import CAR, HONDA_GAS_INTERCEPTOR_THRESHOLD_512
 from opendbc.sunnypilot.car.honda.interface_ext import TORQUE_MOD_PID_CARS
-from opendbc.sunnypilot.car.honda.values_ext import HondaSafetyFlagsSP
+from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 from opendbc.sunnypilot.car.interfaces import setup_interfaces
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
@@ -53,7 +53,7 @@ class TestHondaGasInterceptor(unittest.TestCase):
     ):
       with self.subTest(car=car_name, pedal=pedal, hybrid=hybrid, stock=stock, passive=passive, dashcam=dashcam):
         config = make_test_car_config()
-        config = replace(config, honda=replace(config.honda, enforce_stock_longitudinal=stock))
+        config = replace(config, honda=replace(config.honda, enforce_stock_longitudinal=stock, clarity_interceptor_brake_bench=True))
         fingerprint = gen_empty_fingerprint()
         if pedal:
           fingerprint[0][0x201] = pedal
@@ -71,6 +71,16 @@ class TestHondaGasInterceptor(unittest.TestCase):
 
   def test_clarity_brake_requires_active_nidec_configuration(self):
     ci = interfaces[CAR.HONDA_CLARITY]
+    config = make_test_car_config()
+    bench = replace(config, honda=replace(config.honda, clarity_interceptor_brake_bench=True))
+    fp = gen_empty_fingerprint()
+    fp[0][0x184], fp[0][0x201] = 8, 6
+    for host in (None, config):
+      cp = ci.get_params(CAR.HONDA_CLARITY, fp, [], False, False, False)
+      sp = ci.get_params_sp(cp, CAR.HONDA_CLARITY, fp, [], False, False, False)
+      setup_interfaces(ci, cp, sp, host)
+      self.assertTrue(sp.flags & HondaFlagsSP.CLARITY_INTERCEPTOR_BRAKE_CAPABLE)
+      self.assertEqual(sp.safetyParam, HondaSafetyFlagsSP.NIDEC_HYBRID | HondaSafetyFlagsSP.GAS_INTERCEPTOR)
     for model, param, op_long, docs, pedal_bus in (
       (CarParams.SafetyModel.noOutput, 0, True, False, 0),
       (CarParams.SafetyModel.hondaNidec, 4, True, False, 0),
@@ -85,6 +95,7 @@ class TestHondaGasInterceptor(unittest.TestCase):
         cp.openpilotLongitudinalControl = op_long
         cp.safetyConfigs[0].safetyModel, cp.safetyConfigs[0].safetyParam = model, param
         sp = ci.get_params_sp(cp, CAR.HONDA_CLARITY, fp, [], False, False, docs)
+        setup_interfaces(ci, cp, sp, bench)
         self.assertFalse(sp.safetyParam & HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE)
 
   @parameterized("car_name", [*HONDA_GAS_INTERCEPTOR_THRESHOLD_512, CAR.HONDA_CLARITY])

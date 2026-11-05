@@ -175,6 +175,8 @@ def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config:
       # override runs. Clear that bit while preserving its already-decided radar availability.
       if CP.flags & HondaFlags.BOSCH:
         CP.safetyConfigs[-1].safetyParam &= ~HondaSafetyFlags.BOSCH_LONG.value
+    elif config.clarity_interceptor_brake_bench and CP_SP.flags & HondaFlagsSP.CLARITY_INTERCEPTOR_BRAKE_CAPABLE:
+      CP_SP.safetyParam |= HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE
 
 
 def _initialize_toyota(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config: ToyotaCarConfig) -> None:
