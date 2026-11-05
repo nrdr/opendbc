@@ -14,8 +14,9 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 
-def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False):
+def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False, pcm_mode=2, wind_brake=True):
   config = make_test_car_config()
+  config = replace(config, honda=replace(config.honda, nidec_pcm_mode=pcm_mode, nidec_wind_brake=wind_brake))
   if wind_bench:
     config = replace(config, honda=replace(config.honda, civic_pcm_wind_credit_bench=True))
   config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, live_learning_gas=learning)
@@ -156,7 +157,7 @@ def test_positive_plan_is_not_corrected_twice_in_speed_channel():
   out, messages = ci.apply(cc.as_reader(), structs.CarControlSP(), 0)
   assert ci.CC.accel < 0  # The existing gas/brake feedback correction still runs.
   speed = [int.from_bytes(dat[:2], 'big') * 0.01 / 3.6 for address, dat, _ in messages if address == 0x30C]
-  assert speed and speed[0] == pytest.approx(21.2, abs=0.003)
+  assert speed and speed[0] == pytest.approx(20.0 + 4.0 * ci.CC.pcm_constraints.accel, abs=0.003)
   assert out.brake == 0
   assert ci.CC.speed_cmd_hist[-1][0] == pytest.approx(0.3)
 

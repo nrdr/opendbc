@@ -85,6 +85,9 @@ class HondaFlags(IntFlag):
   BOSCH_TJA_CONTROL = 4096
   LKAS_MINSPEED_CUTOFF = 8192
   HYBRID_ALT_BRAKEHOLD = 16384  # Some Nidec Hybrids use a different brakehold
+  # Logged host command-law choices, NOT Panda safety flags or additional authority.
+  NIDEC_PCM_ECU_MATCHED = 32768
+  NIDEC_PCM_EXPERIMENTAL = 65536
 
 
 # Car button codes

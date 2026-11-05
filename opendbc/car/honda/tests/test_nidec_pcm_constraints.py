@@ -1,4 +1,4 @@
-"""PCM-only comfort shaping, real CAN packing, and braking isolation."""
+"""Experimental positive-only shaping and startup-mode isolation on real CAN."""
 from dataclasses import replace
 
 import numpy as np
@@ -16,14 +16,14 @@ from opendbc.car.honda.values import CAR, DBC
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
-def setup(car=CAR.HONDA_CIVIC, *, enabled=True, interceptor=False, stock=False, learning=False):
-  ci, config = interface(car, interceptor=interceptor, learning=learning)
+def setup(car=CAR.HONDA_CIVIC, *, mode=2, interceptor=False, stock=False, learning=False, legacy=False):
+  ci, config = interface(car, interceptor=interceptor, learning=learning, pcm_mode=mode)
   if stock:
     # Rebuild after selecting the mode; platform scope is fixed at construction.
     ci.CP_SP.flags |= HondaFlagsSP.STOCK_LONGITUDINAL
     from opendbc.car.honda.carcontroller import CarController
     ci.CC = CarController(DBC[car], ci.CP, ci.CP_SP, config.honda)
-  config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, ecu_matched_long=enabled)
+  config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, ecu_matched_long=legacy)
   return ci, config
 
 
@@ -80,7 +80,7 @@ def test_neutral_zone_replaces_the_old_timed_gas_brake_blackout():
 @pytest.mark.parametrize('reason', ['disabled', 'inactive', 'launch'])
 def test_bypass_is_exact_and_does_not_retain_old_filter_state(reason):
   shape = NidecPCMConstraints()
-  args = dict(enabled=True, active=True, launch=False)
+  args = {"enabled": True, "active": True, "launch": False}
   for _ in range(50):
     shape.update(.8, 20., **args)
   args[{'disabled': 'enabled', 'inactive': 'active'}.get(reason, reason)] = reason not in ('disabled', 'inactive')
@@ -96,19 +96,24 @@ def test_bypass_is_exact_and_does_not_retain_old_filter_state(reason):
   (CAR.HONDA_CIVIC_BOSCH, False, False, False),
   (CAR.HONDA_CIVIC, False, True, False),
 ])
-def test_exact_pcm_scope(car, interceptor, stock, expected):
-  ci, _ = setup(car, interceptor=interceptor, stock=stock)
+@pytest.mark.parametrize('mode', [0, 1, 2])
+def test_exact_pcm_scope(car, interceptor, stock, expected, mode):
+  ci, _ = setup(car, mode=mode, interceptor=interceptor, stock=stock)
   assert ci.CC.nidec_pcm is expected
+  assert ci.CC.ecu_matched_pcm == (expected and mode == 1)
+  assert ci.CC.civic_pcm == (expected and mode == 2 and car == CAR.HONDA_CIVIC)
+  # MVL's observability protections belong to every eligible PCM path,
+  # independently of the startup command law and its learning freeze.
+  assert ci.CC.guard_pcm_learner is expected
 
 
-def test_toggle_reaches_actual_civic_pcm_packets_and_does_not_zero_allowance():
-  off, _ = setup(enabled=False)
-  on, _ = setup(enabled=True)
+@pytest.mark.parametrize('legacy', [False, True])
+def test_experimental_shaping_is_always_on_and_preserves_allowance(legacy):
+  on, _ = setup(mode=2, legacy=legacy)
   for tick in range(201):
-    a, b = step(off, .2, tick), step(on, .2, tick)
-  assert on.CC.pcm_speed_sent < off.CC.pcm_speed_sent
+    b = step(on, .2, tick)
   assert on.CC.pcm_speed_sent == pytest.approx(20.0 + ((.2 - .144) * 2. / (2. - .144)) * 4.)
-  assert on.CC.pcm_gas_sent == off.CC.pcm_gas_sent == 198
+  assert on.CC.pcm_gas_sent == 198
   assert all(dat[2] > 0 for addr, dat, _ in b if addr == 0x30C)
 
 
@@ -116,18 +121,21 @@ def test_toggle_reaches_actual_civic_pcm_packets_and_does_not_zero_allowance():
   (CAR.HONDA_CIVIC, True, False), (CAR.HONDA_CLARITY, True, False),
   (CAR.HONDA_CIVIC_BOSCH, False, False), (CAR.HONDA_CIVIC, False, True),
 ])
-def test_toggle_is_packet_identical_outside_pcm(car, interceptor, stock):
-  off, _ = setup(car, enabled=False, interceptor=interceptor, stock=stock)
-  on, _ = setup(car, enabled=True, interceptor=interceptor, stock=stock)
+@pytest.mark.parametrize('mode', [1, 2])
+def test_modes_are_packet_identical_outside_pcm(car, interceptor, stock, mode):
+  off, _ = setup(car, mode=0, interceptor=interceptor, stock=stock)
+  on, _ = setup(car, mode=mode, interceptor=interceptor, stock=stock)
   for tick in range(500):
     accel = [1., .1, -.1, -2., .8][tick // 100]
     assert step(off, accel, tick) == step(on, accel, tick)
 
 
-@pytest.mark.parametrize('car', [CAR.HONDA_CIVIC, CAR.HONDA_PILOT, CAR.HONDA_CLARITY])
-def test_all_brake_packets_unchanged_with_pcm_constraints(car):
-  off, _ = setup(car, enabled=False)
-  on, _ = setup(car, enabled=True)
+def test_experimental_positive_filter_does_not_own_brake_packets():
+  # Test-only bypass isolates this helper, not two different startup laws:
+  # Off intentionally restores MVL PID behavior and ECU has its own brake rules.
+  off, _ = setup(mode=2)
+  on, _ = setup(mode=2)
+  off.CC.pcm_constraints.update = lambda requested, *_args, **_kwargs: requested
   for tick in range(600):
     accel = [1., .2, -.1, -3., .8, -4.][tick // 100]
     a, b = step(off, accel, tick), step(on, accel, tick)
@@ -151,8 +159,11 @@ def test_civic_safety_release_still_wins_over_shaping(reason):
   assert [dat[2] for addr, dat, _ in messages if addr == 0x30C] == [0]
 
 
-def test_pcm_learner_does_not_retrain_for_shaped_commands():
-  ci, config = setup(CAR.HONDA_PILOT, learning=True)
+@pytest.mark.parametrize('car,mode', [
+  (CAR.HONDA_CIVIC, 1), (CAR.HONDA_PILOT, 1), (CAR.HONDA_CLARITY, 1), (CAR.HONDA_CIVIC, 2),
+])
+def test_frozen_startup_modes_do_not_retrain_or_persist_pcm_learning(car, mode):
+  ci, config = setup(car, mode=mode, learning=True)
   before = learned_state(ci.CC)
   for tick in range(6100):
     step(ci, .5, tick)
@@ -160,34 +171,28 @@ def test_pcm_learner_does_not_retrain_for_shaped_commands():
   assert all(all(key.startswith('lat_accel_factor_') for key in item) for item in config.honda.provider.persisted)
 
 
-@pytest.mark.parametrize('car', [CAR.HONDA_PILOT, CAR.HONDA_CLARITY])
-def test_toggle_off_waits_for_shaped_samples_to_leave_learner_history(car):
-  from opendbc.car.honda.carcontroller import NIDEC_SERVO_LAG_FRAMES
-  ci, config = setup(car, learning=True)
-  for tick in range(300):
-    step(ci, .5, tick)
-  assert not any(eligible for _, _, eligible in ci.CC.speed_cmd_hist)
-  before = learned_state(ci.CC)
-  config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, ecu_matched_long=False)
-  for tick in range(300, 300 + NIDEC_SERVO_LAG_FRAMES):
-    step(ci, .5, tick)
-    assert learned_state(ci.CC) == before
-  assert ci.CC.pcm_constraints_washout == 0
-  assert all(eligible for _, _, eligible in ci.CC.speed_cmd_hist)
+@pytest.mark.parametrize('car', [CAR.HONDA_CIVIC, CAR.HONDA_PILOT, CAR.HONDA_CLARITY])
+@pytest.mark.parametrize('mode', [0, 1, 2])
+def test_retired_live_bool_cannot_change_packets_or_learning(car, mode):
+  changed, config = setup(car, mode=mode, learning=True)
+  unchanged, baseline_config = setup(car, mode=mode, learning=True)
+  for tick in range(500):
+    if tick in (0, 250):
+      config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, ecu_matched_long=tick == 0)
+    accel = [1., .1, -.1, -2., .8][tick // 100]
+    assert step(changed, accel, tick) == step(unchanged, accel, tick)
+    assert learned_state(changed.CC) == learned_state(unchanged.CC)
+  assert config.honda.provider.persisted == baseline_config.honda.provider.persisted
 
 
 @pytest.mark.parametrize('car', [CAR.HONDA_PILOT, CAR.HONDA_CLARITY])
-def test_generic_pcm_positive_commands_are_shaped_but_full_acceleration_returns(car):
-  off, _ = setup(car, enabled=False)
-  on, _ = setup(car, enabled=True)
-  for tick in range(201):
-    a, b = step(off, .2, tick), step(on, .2, tick)
-  def speed(messages):
-    return [int.from_bytes(dat[:2], 'big') for addr, dat, _ in messages if addr == 0x30C]
-  assert speed(b)[0] < speed(a)[0]
-  for tick in range(201, 401):
-    a, b = step(off, 2., tick), step(on, 2., tick)
-  assert a == b
+def test_unsupported_experimental_mode_preserves_upstream_mvl_packets(car):
+  off, _ = setup(car, mode=0)
+  experimental, _ = setup(car, mode=2)
+  for tick in range(500):
+    accel = [.2, 2., -.1, -3., .8][tick // 100]
+    assert step(off, accel, tick) == step(experimental, accel, tick)
+  assert not experimental.CC.civic_pcm and not experimental.CC.ecu_matched_pcm
 
 
 def test_grade_brake_zero_crossing_cannot_bypass_or_reset_propulsion_filter():
@@ -207,20 +212,18 @@ def test_grade_brake_zero_crossing_cannot_bypass_or_reset_propulsion_filter():
   assert max(speeds) - min(speeds) < .01
 
 
-def test_shaped_mode_clears_pending_ceiling_evidence_before_learning_resumes():
-  from opendbc.car.honda.carcontroller import NIDEC_SERVO_LAG_FRAMES
-  ci, config = setup(CAR.HONDA_PILOT, learning=True)
-  ci.CC.sat_excess_frames = 101
-  ci.CC.sat_deficit_frames = 151
+@pytest.mark.parametrize('mode,next_mode', [(0, 1), (1, 2), (2, 0)])
+def test_mode_config_replacement_requires_a_new_interface(mode, next_mode):
+  ci, config = setup(mode=mode, learning=True)
+  peer, _ = setup(mode=mode, learning=True)
+  changed_config = replace(config, honda=replace(config.honda, nidec_pcm_mode=next_mode))
+  # Even replacing the feature object's startup config cannot relatch the CP
+  # mode flags inside an already constructed controller.
+  ci.CC.nrdr.config = changed_config.honda
   for tick in range(300):
-    step(ci, .5, tick)
-    assert ci.CC.sat_excess_frames == ci.CC.sat_deficit_frames == 0
-  config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, ecu_matched_long=False)
-  for tick in range(300, 300 + NIDEC_SERVO_LAG_FRAMES):
-    step(ci, .5, tick)
-    assert ci.CC.sat_excess_frames == ci.CC.sat_deficit_frames == 0
-  before = ci.CC.sat_accel
-  ci.CS.out.aEgo = ci.CC.a_ego_filt = 3.
-  step(ci, .5, 300 + NIDEC_SERVO_LAG_FRAMES)
-  assert ci.CC.sat_excess_frames <= 1 and ci.CC.sat_deficit_frames <= 1
-  assert ci.CC.sat_accel == before
+    assert step(ci, .5, tick) == step(peer, .5, tick)
+  assert ci.CC.ecu_matched_pcm == (mode == 1)
+  assert ci.CC.civic_pcm == (mode == 2)
+  restarted, _ = setup(mode=changed_config.honda.nidec_pcm_mode, learning=True)
+  assert restarted.CC.ecu_matched_pcm == (next_mode == 1)
+  assert restarted.CC.civic_pcm == (next_mode == 2)

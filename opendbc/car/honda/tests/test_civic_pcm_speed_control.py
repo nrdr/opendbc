@@ -5,6 +5,7 @@ import pytest
 
 from opendbc.car import structs
 from opendbc.car.honda import civic_pcm
+from opendbc.car.honda.nidec_pcm_constraints import taper_positive_accel
 from opendbc.car.honda.tests.test_civic_pcm import interface, control
 from opendbc.car.honda.tests.test_mvl_nrdr_integration import learned_state
 from opendbc.car.honda.values import CAR
@@ -65,7 +66,9 @@ def test_full_acceleration_allowance_is_preserved(accel):
   for tick in range(100):
     _, messages = apply(ci, accel, tick)
   assert ci.CC.pcm_gas_sent == ci.CC.params.NIDEC_GAS_MAX == 198
-  assert ci.CC.pcm_speed_sent > ci.CS.out.vEgo
+  # Experimental includes the former opt-in positive-command taper. Tiny
+  # requests can therefore become neutral without reducing the gas allowance.
+  assert ci.CC.pcm_speed_sent == pytest.approx(20. + 4. * taper_positive_accel(accel, 20.))
   assert ci.CC.accel == pytest.approx(accel)
 
 
@@ -79,7 +82,7 @@ def test_positive_request_cannot_inherit_negative_integral_or_bias():
     assert ci.CC.apply_brake_last == 0
   assert ci.CC.accel == pytest.approx(.3)
   assert ci.CC.nidec_pid.i == ci.CC.nidec_pid_factor == 0.0
-  assert ci.CC.pcm_speed_sent == pytest.approx(21.2)
+  assert ci.CC.pcm_speed_sent == pytest.approx(20. + 4. * taper_positive_accel(.3, 20.))
 
 
 def test_zero_acceleration_tracks_reference_not_a_target_chasing_current_speed():
