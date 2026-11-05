@@ -169,6 +169,7 @@ def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config:
       CP.pcmCruise = True
       CP_SP.flags |= HondaFlagsSP.STOCK_LONGITUDINAL.value
       CP_SP.safetyParam |= HondaSafetyFlagsSP.STOCK_LONGITUDINAL
+      CP_SP.safetyParam &= ~HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE
 
       # Honda's base interface derives the panda longitudinal safety bit before Sunny's force-stock
       # override runs. Clear that bit while preserving its already-decided radar availability.

@@ -14,6 +14,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.honda import lane_path
 from opendbc.car.honda import hud_objects
 from opendbc.car.honda import civic_pcm
+from opendbc.car.honda import clarity_braking
 from opendbc.car.honda.nidec_pcm_constraints import NidecPCMConstraints, uses_nidec_pcm
 from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
 
@@ -234,6 +235,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.tja_control = bool(CP.flags & HondaFlags.BOSCH_TJA_CONTROL)
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
     self.civic_pcm = civic_pcm.uses_civic_pcm(CP, CP_SP)
+    self.keep_pcm_acc = clarity_braking.qualified(CP, CP_SP)
+    self.clarity_hold = clarity_braking.StandstillHold()
     self.civic_pcm_speed_control = False
     self.pcm_constraints = NidecPCMConstraints()
     self.pcm_constraints_washout = 0
@@ -459,6 +462,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       hud_v_cruise = hud_control.setSpeed / CS.v_cruise_factor if hud_control.speedVisible else 255
     self.nrdr.update_system_speed_flash(CC, CS, hud_control)
     pcm_cancel_cmd = CC.cruiseControl.cancel
+    clarity_pedal = self.keep_pcm_acc and not self.CP.passive
+    clarity_long = clarity_pedal and CC.enabled and CC.longActive and not (
+      CS.out.gasPressed or CS.out.brakePressed or pcm_cancel_cmd)
+    # A camera AEB request is not confirmation Panda forwarded it. Suppress
+    # propulsion but retain the service-brake command for Panda's arbitration.
+    clarity_propulsion = clarity_long and not CS.out.stockAeb
+    if clarity_pedal and not clarity_long:
+      pcm_cancel_cmd = pcm_cancel_cmd or CS.pcm_acc_active
 
     if len(CC.orientationNED) == 3:
       self.pitch = CC.orientationNED[1]
@@ -481,9 +492,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         accel = self.accel
         accel_cmd = actuators.accel
         gas, brake = compute_gas_brake(accel_cmd + hill_brake, CS.out.vEgo, self.CP)
-        brake = self.nrdr.nidec_brake_authority(
-          accel_cmd + hill_brake, brake, CS.out.vEgo, live.full_brake_authority and self.CP_SP.enableGasInterceptor,
-        )
+        if not clarity_pedal:
+          brake = self.nrdr.nidec_brake_authority(
+            accel_cmd + hill_brake, brake, CS.out.vEgo, live.full_brake_authority and self.CP_SP.enableGasInterceptor,
+          )
       elif self.civic_pcm_speed_control:
         # The PCM speed servo already closes the propulsion loop. A second,
         # negative-only acceleration integrator wound through that servo's lag
@@ -588,10 +600,16 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.last_torque = limited_torque if CS.steer_control_active else 0.0
 
     # *** apply brake hysteresis ***
+    if clarity_pedal:
+      if not clarity_long:
+        gas, brake = 0.0, 0.0
+      brake = self.clarity_hold.update(brake, CS.out.standstill, clarity_long and actuators.longControlState == LongCtrlState.stopping)
     pre_limit_brake, self.braking, self.brake_steady = actuator_hysteresis(brake, self.braking, self.brake_steady)
 
     # *** rate limit after the enable check ***
     brake_rate_up = live.stopping_decel_rate if actuators.longControlState == LongCtrlState.stopping else 3.0
+    if clarity_pedal:
+      brake_rate_up = 1.0  # calibration measured with a 1.0 brake fraction/s rise
     self.brake_last = rate_limit(pre_limit_brake, self.brake_last, -2., brake_rate_up * DT_CTRL)
 
     # vehicle hud display, wait for one update from 10Hz 0x304 msg
@@ -1108,9 +1126,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.windfactor = min(prior_windfactor, self.windfactor)
 
     elif self.CP_SP.enableGasInterceptor or (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL) or not CC.longActive:
-      # Gas interceptor (0x201 on bus) and stock-longitudinal mode do not drive PCM_GAS via ACC_HUD
+      # No PCM speed request with an interceptor. Only the Clarity keeps the factory coasting allowance.
       pcm_speed = 0.0
-      pcm_accel = int(0.0)
+      pcm_accel = clarity_braking.hud_gas(CS.out.vEgo) if clarity_propulsion else 0
     elif self.CP.flags & HondaFlags.BOSCH:
       # Bosch: pcm_speed/pcm_accel for ACC_HUD only; gas/brake commands use separate path below
       speed_control = 0
@@ -1212,8 +1230,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                           self.stopping_counter, self.CP, gas_pedal_force))
         elif not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
           if self.CP_SP.enableGasInterceptor:
-            apply_brake = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live.full_brake_authority)
-            apply_brake = int(np.clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
+            brake_fraction = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live.full_brake_authority and not clarity_pedal)
+            if clarity_pedal:
+              apply_brake = clarity_braking.hybrid_brake_command(brake_fraction, CS.out.vEgo) if clarity_long else 0
+            else:
+              apply_brake = int(np.clip(brake_fraction * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
           else:
             apply_brake = np.clip(self.brake_last - wind_brake, 0.0, 1.0)
             if (apply_brake > 0) and (actuators.longControlState == LongCtrlState.pid) and (CS.out.vEgo > 1e-5) and (not CS.out.stockAeb):
@@ -1231,7 +1252,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           pump_on, self.last_pump_ts = brake_pump_hysteresis(apply_brake, self.apply_brake_last, self.last_pump_ts, ts)
 
           # limit brake release to 32 units per frame to match factory
-          apply_brake = max(self.apply_brake_last - 32, apply_brake)
+          if not clarity_pedal or clarity_long:
+            apply_brake = max(self.apply_brake_last - 32, apply_brake)
 
           pcm_override = CC.longActive or CS.out.stockAeb
           if apply_brake > 0: # prevent fault from concurrent gas + brake
@@ -1244,11 +1266,15 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           if self.CP_SP.enableGasInterceptor:
             learned_gas = self.nrdr.update_nidec_learner(
               CC, CS, actuators, gas, brake, wind_brake, self.pitch,
-              live.live_learning_gas and self.gasint_nolearn_ticks == 0,
+              live.live_learning_gas and self.gasint_nolearn_ticks == 0 and (not clarity_pedal or clarity_propulsion),
             )
             self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
+            # The interceptor adds road-load compensation internally. Do not let it
+            # request propulsion while relinquishing control or applying friction brake.
+            inhibit_gas = clarity_pedal and (not clarity_propulsion or apply_brake > 0 or self.clarity_hold.latched)
             can_sends.extend(GasInterceptorCarController.update(
-              self, CC, CS, learned_gas, brake, wind_brake, self.packer, self.frame, live.roen_acceleration_limits,
+              self, CC, CS, 0.0 if inhibit_gas else learned_gas, brake,
+              0.0 if inhibit_gas else wind_brake, self.packer, self.frame, live.roen_acceleration_limits,
             ))
             self.gasint_nolearn_ticks = max(0, self.gasint_nolearn_ticks - 1)
 
@@ -1282,7 +1308,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               self.gas_alphas_nomaxspeed[band] = min(self.gas_alphas_nomaxspeed[band], self.gas_alphas[band])
 
           self.apply_brake_last = apply_brake
-          self.brake = apply_brake / self.params.NIDEC_BRAKE_MAX
+          self.brake = (brake_fraction if clarity_long else 0.0) if clarity_pedal else apply_brake / self.params.NIDEC_BRAKE_MAX
 
     # Send dashboard UI commands. On CAN FD, ACC_HUD is a radar/ADAS look-alike that openpilot only
     # owns when it has disabled the radar (op longitudinal); in stock ACC the real system sends it and
@@ -1307,7 +1333,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, acc_hud_pcm_accel,
                                                    hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
                                                    self.CP.openpilotLongitudinalControl,
-                                                   nrdr_options=self.nrdr.nidec_hud_options(CC, CS, hud_control, live)))
+                                                   nrdr_options=self.nrdr.nidec_hud_options(CC, CS, hud_control, live),
+                                                   avoid_pcm_hold=clarity_pedal))
 
       if live.spoof_camera_messages and self.CP.carFingerprint not in HONDA_BOSCH:
         can_sends.append(create_camera_message(self.packer, self.CAN.pt))

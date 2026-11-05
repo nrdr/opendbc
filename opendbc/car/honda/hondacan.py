@@ -156,7 +156,7 @@ def create_bosch_supplemental_1(packer, CAN):
 
 
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
-                   alphalong, nrdr_options=None):
+                   alphalong, nrdr_options=None, avoid_pcm_hold=False):
   acc_hud_values = {
     'CRUISE_SPEED': hud_v_cruise,
     'ENABLE_MINI_CAR': 1 if enabled else 0,
@@ -190,6 +190,10 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
 
   acc_hud_values = update_acc_hud_values(acc_hud_values, CP, enabled, pcm_speed, pcm_accel, hud_control,
                                           hud_v_cruise, acc_hud, speed_control, nrdr_options)
+  # Lead-speed display uses 252 for a stopped lead. Reserve that code for
+  # the factory camera; our Clarity interceptor controller owns standstill hold.
+  if avoid_pcm_hold and round(acc_hud_values["CRUISE_SPEED"]) == 252:
+    acc_hud_values["CRUISE_SPEED"] = 255
   return packer.make_can_msg("ACC_HUD", bus, acc_hud_values)
 
 

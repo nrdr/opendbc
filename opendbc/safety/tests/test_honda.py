@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 
 from opendbc.car.honda.values import HondaSafetyFlags
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.car.structs import CarParams
@@ -1004,6 +1005,110 @@ class TestHondaNidecHybridSafety(TestHondaNidecPcmSafety):
     self.safety.set_current_safety_param_sp(HondaSafetyFlagsSP.NIDEC_HYBRID)
     self.safety.set_safety_hooks(CarParams.SafetyModel.hondaNidec, 0)
     self.safety.init_tests()
+
+
+class TestClarityInterceptorBrakeGuard(unittest.TestCase):
+  FLAGS = HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE | HondaSafetyFlagsSP.NIDEC_HYBRID | HondaSafetyFlagsSP.GAS_INTERCEPTOR
+
+  def setUp(self):
+    self.safety = libsafety_py.libsafety
+    self.packer = CANPackerSafety("honda_clarity_hybrid_2018_can_generated")
+    self.configure(self.FLAGS)
+
+  def configure(self, sp_flags, flags=0):
+    self.safety.set_current_safety_param_sp(sp_flags)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hondaNidec, flags)
+    self.safety.init_tests()
+    self.safety.set_controls_allowed(True)
+
+  def pedal(self, bus=0, length=6):
+    self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x201, bus, bytes(length)))
+
+  def packet(self, standard=0, hybrid=0, *, bus=0, aeb=False):
+    return self.packer.make_can_msg_safety("BRAKE_COMMAND", bus, {"COMPUTER_BRAKE": standard, "COMPUTER_BRAKE_HYBRID": hybrid,
+                                                                  "AEB_REQ_1": int(aeb)})
+
+  def test_separate_fields_and_permissions(self):
+    self.pedal()
+    for allowed, gas in ((True, False), (True, True), (False, False)):
+      self.safety.set_controls_allowed(allowed)
+      self.safety.set_gas_pressed_prev(gas)
+      for standard in (0, 1, 254, 255, 256, 320, 1023):
+        for hybrid in (0, 1, 255, 256, 319, 320, 321, 1023):
+          expected = standard <= 255 and hybrid <= 320 if allowed and not gas else standard == hybrid == 0
+          with self.subTest(allowed=allowed, gas=gas, standard=standard, hybrid=hybrid):
+            self.assertEqual(self.safety.safety_tx_hook(self.packet(standard, hybrid)), expected)
+
+  def test_requires_qualified_pedal_rx_after_every_init(self):
+    for _ in range(2):
+      self.configure(self.FLAGS)
+      self.pedal(bus=2)
+      self.pedal(length=8)
+      self.assertFalse(self.safety.safety_tx_hook(self.packet(hybrid=256)))
+      self.assertTrue(self.safety.safety_tx_hook(self.packet(hybrid=255)))
+      self.pedal()
+      self.assertTrue(self.safety.safety_tx_hook(self.packet(hybrid=320)))
+
+  def test_invalid_configurations(self):
+    for sp, param in ((self.FLAGS & ~HondaSafetyFlagsSP.GAS_INTERCEPTOR, 0),
+                      (self.FLAGS & ~HondaSafetyFlagsSP.NIDEC_HYBRID, 0),
+                      (HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE, 0),
+                      (self.FLAGS | HondaSafetyFlagsSP.GAS_INTERCEPTOR_THRESHOLD_512, 0),
+                      (self.FLAGS | HondaSafetyFlagsSP.STOCK_LONGITUDINAL, 0),
+                      (self.FLAGS, HondaSafetyFlags.NIDEC_ALT), (self.FLAGS, HondaSafetyFlags.RLX_STEER_BRIDGE)):
+      with self.subTest(sp=sp, param=param):
+        self.configure(sp, param)
+        self.pedal()
+        self.assertFalse(self.safety.safety_tx_hook(self.packet(0, 256)))
+        self.assertFalse(self.safety.safety_tx_hook(self.packet(256, 0)))
+    # Other hybrid Hondas with a pedal retain the existing hybrid limit.
+    self.configure(self.FLAGS & ~HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE)
+    self.pedal()
+    self.assertTrue(self.safety.safety_tx_hook(self.packet(hybrid=255)))
+    self.assertFalse(self.safety.safety_tx_hook(self.packet(hybrid=256)))
+
+  def test_stock_aeb_compares_last_transmitted_hybrid_brake(self):
+    self.pedal()
+    self.assertTrue(self.safety.safety_tx_hook(self.packet(10, 319)))
+    self.assertFalse(self.safety.safety_tx_hook(self.packet(256, 700)))
+    for stock, forward in ((318, False), (319, True), (200, True)):
+      self.assertTrue(self.safety.safety_rx_hook(self.packet(0, stock, bus=2, aeb=True)))
+      self.assertEqual(self.safety.get_honda_fwd_brake(), forward)
+      if forward:
+        self.assertFalse(self.safety.safety_tx_hook(self.packet()))
+        self.assertFalse(self.safety.safety_tx_hook(self.packet(0, 320)))
+    self.assertTrue(self.safety.safety_rx_hook(self.packet(bus=2)))
+    self.assertFalse(self.safety.get_honda_fwd_brake())
+    self.assertTrue(self.safety.safety_tx_hook(self.packet(0, 320)))
+
+  def test_stock_aeb_rx_forward_and_host_tx_sequence(self):
+    def check_camera(camera, brake, aeb, destination):
+      msg = camera.make_can_msg_safety("BRAKE_COMMAND", 2, {"COMPUTER_BRAKE_HYBRID": brake, "AEB_REQ_1": int(aeb)})
+      self.assertTrue(self.safety.safety_rx_hook(msg))
+      self.assertEqual(self.safety.safety_fwd_hook(2, msg.addr), destination)
+
+    for disable_stock_aeb in (False, True):
+      for takeover_brake in (200, 201):
+        with self.subTest(disable_stock_aeb=disable_stock_aeb, takeover_brake=takeover_brake):
+          self.configure(self.FLAGS)
+          self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.DISABLE_STOCK_AEB if disable_stock_aeb else 0)
+          self.pedal()
+          # Independent camera counter: host brake transmissions must not advance it.
+          camera = CANPackerSafety("honda_clarity_hybrid_2018_can_generated")
+
+          self.assertTrue(self.safety.safety_tx_hook(self.packet(hybrid=200)))
+          check_camera(camera, 80, True, -1)  # Valid RX, but weaker than the host: do not forward to bus 0.
+          for tick in (1, 2, 3):
+            self.safety.set_timer(tick * 20_000)
+            self.assertTrue(self.safety.safety_tx_hook(self.packet(hybrid=200)))  # No intervening camera RX.
+
+          destination = -1 if disable_stock_aeb else 0
+          check_camera(camera, takeover_brake, True, destination)
+          self.assertEqual(self.safety.safety_tx_hook(self.packet(hybrid=200)), disable_stock_aeb)
+          check_camera(camera, 80, True, destination)  # Once forwarded, the camera keeps priority through weaker requests.
+          self.assertEqual(self.safety.safety_tx_hook(self.packet(hybrid=200)), disable_stock_aeb)
+          check_camera(camera, 0, False, -1)
+          self.assertTrue(self.safety.safety_tx_hook(self.packet(hybrid=200)))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 import unittest
+from dataclasses import replace
 
 from opendbc.testing import parameterized
 
@@ -15,6 +16,8 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.honda.values import CAR, HONDA_GAS_INTERCEPTOR_THRESHOLD_512
 from opendbc.sunnypilot.car.honda.interface_ext import TORQUE_MOD_PID_CARS
 from opendbc.sunnypilot.car.honda.values_ext import HondaSafetyFlagsSP
+from opendbc.sunnypilot.car.interfaces import setup_interfaces
+from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 CarFw = CarParams.CarFw
 
@@ -35,6 +38,54 @@ class TestHondaEpsMod(unittest.TestCase):
 
 
 class TestHondaGasInterceptor(unittest.TestCase):
+
+  def test_clarity_brake_safety_flag(self):
+    for car_name, pedal, hybrid, stock, passive, dashcam, expected in (
+      (CAR.HONDA_CLARITY, 6, True, False, False, False, True),
+      (CAR.HONDA_CLARITY, 0, True, False, False, False, False),
+      (CAR.HONDA_CLARITY, 8, True, False, False, False, False),
+      (CAR.HONDA_CLARITY, 6, False, False, False, False, False),
+      (CAR.HONDA_CLARITY, 6, True, True, False, False, False),
+      (CAR.HONDA_CLARITY, 6, True, False, True, False, False),
+      (CAR.HONDA_CLARITY, 6, True, False, False, True, False),
+      (CAR.HONDA_CIVIC, 6, True, False, False, False, False),
+      (CAR.ACURA_RLX_HYBRID, 6, True, False, False, False, False),
+    ):
+      with self.subTest(car=car_name, pedal=pedal, hybrid=hybrid, stock=stock, passive=passive, dashcam=dashcam):
+        config = make_test_car_config()
+        config = replace(config, honda=replace(config.honda, enforce_stock_longitudinal=stock))
+        fingerprint = gen_empty_fingerprint()
+        if pedal:
+          fingerprint[0][0x201] = pedal
+        if hybrid:
+          fingerprint[0][0x184] = 8
+        ci = interfaces[car_name]
+        cp = ci.get_params(car_name, fingerprint, [], False, False, False, interface_config=config)
+        cp.passive, cp.dashcamOnly = passive, dashcam
+        sp = ci.get_params_sp(cp, car_name, fingerprint, [], False, False, False)
+        setup_interfaces(ci, cp, sp, config)
+        self.assertEqual(bool(sp.safetyParam & HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE), expected)
+        if expected:
+          self.assertEqual(cp.safetyConfigs[-1].safetyParam, 0)
+          self.assertEqual(sp.safetyParam, HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE | HondaSafetyFlagsSP.NIDEC_HYBRID | HondaSafetyFlagsSP.GAS_INTERCEPTOR)
+
+  def test_clarity_brake_requires_active_nidec_configuration(self):
+    ci = interfaces[CAR.HONDA_CLARITY]
+    for model, param, op_long, docs, pedal_bus in (
+      (CarParams.SafetyModel.noOutput, 0, True, False, 0),
+      (CarParams.SafetyModel.hondaNidec, 4, True, False, 0),
+      (CarParams.SafetyModel.hondaNidec, 0, False, False, 0),
+      (CarParams.SafetyModel.hondaNidec, 0, True, True, 0),
+      (CarParams.SafetyModel.hondaNidec, 0, True, False, 2),
+    ):
+      with self.subTest(model=model, param=param, op_long=op_long, docs=docs, pedal_bus=pedal_bus):
+        fp = gen_empty_fingerprint()
+        fp[0][0x184], fp[pedal_bus][0x201] = 8, 6
+        cp = ci.get_params(CAR.HONDA_CLARITY, fp, [], False, False, False)
+        cp.openpilotLongitudinalControl = op_long
+        cp.safetyConfigs[0].safetyModel, cp.safetyConfigs[0].safetyParam = model, param
+        sp = ci.get_params_sp(cp, CAR.HONDA_CLARITY, fp, [], False, False, docs)
+        self.assertFalse(sp.safetyParam & HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE)
 
   @parameterized("car_name", [*HONDA_GAS_INTERCEPTOR_THRESHOLD_512, CAR.HONDA_CLARITY])
   def test_vehicle_threshold_is_forwarded_to_panda_safety(self, car_name):

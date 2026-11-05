@@ -55,6 +55,9 @@ static bool honda_bosch_long = false;
 static bool honda_bosch_radarless = false;
 static bool honda_bosch_canfd = false;
 static bool honda_nidec_hybrid = false;
+static bool honda_clarity_brake_guard = false;
+static bool honda_clarity_brake_eligible = false;
+static bool honda_clarity_pedal_seen = false;
 static bool honda_stock_longitudinal = false;
 static bool honda_gas_interceptor_threshold_512 = false;
 static bool honda_no_engine_data_msg = false;
@@ -214,6 +217,10 @@ static void honda_rx_hook(const CANPacket_t *msg) {
 
   // length check because bosch hardware also uses this id (0x201 w/ len = 8)
   if (msg->addr == 0x201U) {
+    // The Nidec interceptor RX check admits only bus 0, DLC 6. Do not unlock the higher limit on host flags alone.
+    if (honda_clarity_brake_eligible) {
+      honda_clarity_pedal_seen = true;
+    }
     // panda interceptor threshold needs to be equivalent to openpilot threshold to avoid controls mismatches
     // If thresholds are mismatched then it is possible for panda to see the gas fall and rise while openpilot is in the pre-enabled state
     // 492 is calculated from the DBC gains; noisy Pilot/Odyssey/Ridgeline pedals use the host-provided 512 threshold flag.
@@ -295,17 +302,24 @@ static bool honda_tx_hook(const CANPacket_t *msg) {
 
   // BRAKE: safety check (nidec)
   if ((msg->addr == 0x1FAU) && (msg->bus == bus_pt)) {
-    honda_brake = (msg->data[0] << 2) + ((msg->data[1] >> 6) & 0x3U);
-
-    if (honda_nidec_hybrid) {
-      honda_brake = (msg->data[6] << 2) + ((msg->data[7] >> 6) & 0x3U);
-    }
-
-    if (longitudinal_brake_checks(honda_brake, HONDA_NIDEC_LONG_LIMITS)) {
+    const int standard_brake = (msg->data[0] << 2) | (msg->data[1] >> 6);
+    const int hybrid_brake = (msg->data[6] << 2) | (msg->data[7] >> 6);
+    const int brake = honda_nidec_hybrid ? hybrid_brake : standard_brake;
+    if (honda_clarity_brake_guard) {
+      const LongitudinalLimits clarity_hybrid_limits = {.max_brake = honda_clarity_pedal_seen ? 320 : 255};
+      // Independent fields. Neither may request any brake when longitudinal actuation is disallowed.
+      if (longitudinal_brake_checks(standard_brake, HONDA_NIDEC_LONG_LIMITS) || longitudinal_brake_checks(hybrid_brake, clarity_hybrid_limits)) {
+        tx = false;
+      }
+    } else if (longitudinal_brake_checks(brake, HONDA_NIDEC_LONG_LIMITS)) {
       tx = false;
     }
     if (honda_fwd_brake) {
       tx = false;
+    }
+    // A rejected Clarity request never reached the car; don't let it suppress a subsequent stock AEB.
+    if (!honda_clarity_brake_guard || tx) {
+      honda_brake = brake;
     }
   }
 
@@ -438,6 +452,7 @@ static safety_config honda_nidec_init(uint16_t param) {
   const uint16_t HONDA_PARAM_GAS_INTERCEPTOR = 2;
   const uint16_t HONDA_PARAM_STOCK_LONGITUDINAL = 4;
   const uint16_t HONDA_PARAM_GAS_INTERCEPTOR_THRESHOLD_512 = 8;
+  const uint16_t HONDA_PARAM_SP_CLARITY_INTERCEPTOR_BRAKE = 16;
 
   honda_hw = HONDA_NIDEC;
   honda_brake = 0;
@@ -460,6 +475,11 @@ static safety_config honda_nidec_init(uint16_t param) {
   enable_gas_interceptor = GET_FLAG(current_safety_param_sp, HONDA_PARAM_GAS_INTERCEPTOR);
   honda_stock_longitudinal = GET_FLAG(current_safety_param_sp, HONDA_PARAM_STOCK_LONGITUDINAL);
   honda_gas_interceptor_threshold_512 = GET_FLAG(current_safety_param_sp, HONDA_PARAM_GAS_INTERCEPTOR_THRESHOLD_512);
+  honda_clarity_brake_guard = GET_FLAG(current_safety_param_sp, HONDA_PARAM_SP_CLARITY_INTERCEPTOR_BRAKE);
+  // Exact Clarity configuration: not RLX/alternate Nidec, stock-long, or a different pedal threshold.
+  honda_clarity_brake_eligible = (param == 0U) && (current_safety_param_sp == (HONDA_PARAM_SP_CLARITY_INTERCEPTOR_BRAKE |
+                                  HONDA_PARAM_SP_NIDEC_HYBRID | HONDA_PARAM_GAS_INTERCEPTOR));
+  honda_clarity_pedal_seen = false;
 
   if (rlx_steer_bridge) {
     // RLX uses the alternate SCM messages, plus the bridged LKAS_HUD on the powertrain bus
@@ -522,6 +542,9 @@ static safety_config honda_nidec_init(uint16_t param) {
 }
 
 static safety_config honda_bosch_init(uint16_t param) {
+  honda_clarity_brake_guard = false;
+  honda_clarity_brake_eligible = false;
+  honda_clarity_pedal_seen = false;
   static CanMsg HONDA_BOSCH_TX_MSGS[] = {{0xE4, 0, 5, .check_relay = true}, {0xE5, 0, 8, .check_relay = true}, {0x296, 1, 4, .check_relay = false},
                                          {0x33D, 0, 5, .check_relay = true}, {0x33D, 0, 8, .check_relay = true}, {0x33DA, 0, 5, .check_relay = true}, {0x33DB, 0, 8, .check_relay = true}};  // Bosch
 

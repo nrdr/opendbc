@@ -489,6 +489,12 @@ class CarInterface(CarInterfaceBase):
       ret.safetyParam |= HondaSafetyFlagsSP.GAS_INTERCEPTOR
       if candidate in HONDA_GAS_INTERCEPTOR_THRESHOLD_512:
         ret.safetyParam |= HondaSafetyFlagsSP.GAS_INTERCEPTOR_THRESHOLD_512
+      if (candidate == CAR.HONDA_CLARITY and fingerprint[CAN.pt].get(0x201) == 6 and
+          ret.safetyParam == (HondaSafetyFlagsSP.NIDEC_HYBRID | HondaSafetyFlagsSP.GAS_INTERCEPTOR) and
+          len(stock_cp.safetyConfigs) == 1 and stock_cp.safetyConfigs[0].safetyModel == structs.CarParams.SafetyModel.hondaNidec and
+          stock_cp.safetyConfigs[0].safetyParam == 0 and stock_cp.openpilotLongitudinalControl and
+          not (docs or stock_cp.passive or stock_cp.dashcamOnly or ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL)):
+        ret.safetyParam |= HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE
 
     stock_cp.autoResumeSng = stock_cp.autoResumeSng or ret.enableGasInterceptor
     stock_cp.minEnableSpeed = -1. if ret.enableGasInterceptor else stock_cp.minEnableSpeed

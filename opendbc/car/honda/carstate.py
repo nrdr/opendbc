@@ -5,6 +5,7 @@ from collections import defaultdict
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.honda import clarity_braking
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.values import (CAR, DBC, CarControllerParams, CruiseButtons, CruiseSettings,
                                       GearShifter, HondaFlags)
@@ -33,6 +34,8 @@ class CarState(CarStateBase, CarStateExt):
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 
     self.nrdr = HondaCarStateFeatures(CP, config)
+    self.keep_pcm_acc = clarity_braking.qualified(CP, CP_SP)
+    self.pcm_acc_active = False
 
     if CP.transmissionType != TransmissionType.manual:
       self.gearbox_msg = "GEARBOX_AUTO"
@@ -276,7 +279,9 @@ class CarState(CarStateBase, CarStateExt):
       ret.brakePressed = (cp.vl["POWERTRAIN_DATA"]["BRAKE_PRESSED"] != 0) or self.brake_switch_active
 
     ret.deprecated.brake = cp.vl["VSA_STATUS"]["USER_BRAKE"]
-    ret.cruiseState.enabled = cp.vl["POWERTRAIN_DATA"]["ACC_STATUS"] != 0
+    self.pcm_acc_active = cp.vl["POWERTRAIN_DATA"]["ACC_STATUS"] != 0
+    # card sets passive after constructing the interface; don't cache it.
+    ret.cruiseState.enabled = self.pcm_acc_active and (not self.keep_pcm_acc or self.CP.passive)
     ret.cruiseState.available = bool(cp.vl[self.car_state_scm_msg]["MAIN_ON"])
 
     # Bosch cars take a few minutes after startup to clear prior faults
