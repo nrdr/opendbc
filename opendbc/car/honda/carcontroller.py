@@ -439,6 +439,13 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # must fail closed on freshness, not flip back to another law mid-drive.
     self.civic_pcm_speed_control = self.civic_pcm and (self.civic_pcm_speed_control or CC_SP.civicPcmEnabled)
     pcm_reference = civic_pcm.reference_speed(CC_SP, now_nanos, float(CC.actuators.accel)) if self.civic_pcm_speed_control else None
+    # On engagement the published state can still be 'off' for one tick.
+    # Neither that tick nor a stopping request is permission to drive forward.
+    civic_wait_for_drive = self.civic_pcm_speed_control and CC.longActive and CC.actuators.longControlState not in (
+      LongCtrlState.pid, LongCtrlState.starting,
+    )
+    if civic_wait_for_drive:
+      self.launch_active = False
     # The Civic candidate uses PCM_GAS as an allowance. The existing MVL PCM
     # identifiers assume a pedal-position target and must not learn/persist
     # against this different command law. Keep their saved state untouched.
@@ -721,7 +728,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and not self.CP_SP.enableGasInterceptor and \
        not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
       if not self.launch_active:
-        if CC.longActive and (not CS.out.gasPressed) and (not CS.out.brakePressed) and \
+        if CC.longActive and not civic_wait_for_drive and (not CS.out.gasPressed) and (not CS.out.brakePressed) and \
              (CS.out.vEgo < 0.1) and (actuators.accel > 0.05):
           self.launch_active = True
           self.launch_ticks = 0
@@ -930,7 +937,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # the full authority band until first motion, then hand back to the learned seed.
           launch_seed = self.params.NIDEC_GAS_MAX
         self.new_accel = int(min(launch_seed, self.params.NIDEC_GAS_MAX))
-      if self.civic_pcm_speed_control and (pcm_reference is None or CS.out.brakePressed or CS.out.stockAeb):
+      if self.civic_pcm_speed_control and (civic_wait_for_drive or pcm_reference is None or CS.out.brakePressed or CS.out.stockAeb):
         pcm_speed = 0.0
         self.new_accel = 0
       # recursive sensitivity of the model prediction to average_factor, advanced with the model itself;

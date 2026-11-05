@@ -25,6 +25,39 @@ def gas_packets(messages):
   return [dat[2] for address, dat, _ in messages if address == 0x30C]
 
 
+@pytest.mark.parametrize('preexisting_launch', [False, True])
+def test_no_pcm_propulsion_while_waiting_at_a_stop(preexisting_launch):
+  ci, _ = interface()
+  ci.CS.out.vEgo = 0.0
+  ci.CS.out.standstill = True
+  ci.CS.engine_rpm = 1500
+  states = structs.CarControl.Actuators.LongControlState
+  if preexisting_launch:
+    apply(ci, .8, speed=0.)
+    assert ci.CC.launch_active
+  packets = []
+  for tick in range(1, 161):
+    now = START + tick * 10_000_000
+    cc = control(.10 if tick <= 10 else -.08)
+    cc.actuators.longControlState = states.off if tick == 1 else states.stopping
+    if tick == 96:
+      ci.CS.out.standstill = False
+      ci.CS.out.vEgo = .25   # wheel motion is not permission to restart
+    _, msgs = ci.apply(cc.as_reader(), reference(.6, now), now)
+    assert ci.CC.new_accel == 0
+    assert not ci.CC.launch_active
+    packets.extend(dat[:3] for addr, dat, _ in msgs if addr == 0x30C)
+  assert packets == [bytes(3)] * 16
+
+  # A genuine departure is still handled by the normal positive-plan path.
+  ci.CS.out.vEgo = 0.
+  ci.CS.out.standstill = True
+  for tick in range(161, 191):
+    apply(ci, .8, tick, speed=.1)
+  assert ci.CC.launch_active
+  assert ci.CC.pcm_gas_sent > 0 and ci.CC.pcm_speed_sent > 0
+
+
 @pytest.mark.parametrize('accel', [.01, .1, .5, 1., 2.])
 def test_full_acceleration_allowance_is_preserved(accel):
   ci, _ = interface()
