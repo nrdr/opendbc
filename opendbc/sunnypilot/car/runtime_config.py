@@ -64,6 +64,7 @@ class HondaCarConfig:
   clarity_interceptor_brake_bench: bool = False
   civic_pcm_wind_credit_bench: bool = False  # Off-device test injection only; not a driver setting.
   rdx_tjb_a220_transport_bench: bool = False
+  mvl_longitudinal: bool = False  # HondaLiveLearningGas at startup; restart to change.
 
 
 @dataclass(frozen=True, slots=True)

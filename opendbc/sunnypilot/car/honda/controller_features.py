@@ -1,10 +1,12 @@
 import math
 import time
+from dataclasses import replace
 
 import numpy as np
 
 from opendbc.car import DT_CTRL, rate_limit, structs
-from opendbc.car.honda.values import HONDA_BOSCH
+from opendbc.car.honda.values import HONDA_BOSCH, HondaFlags
+from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.sunnypilot.car.honda.longitudinal import LongGasLearner
 from opendbc.sunnypilot.car.runtime_config import HondaCarConfig, HondaLiveTuning
 
@@ -18,9 +20,13 @@ class HondaControllerFeatures:
     self.config = config
     self.config.provider.initialize_live_learning_gas(CP_SP.enableGasInterceptor)
 
-    gas_factor, wind_factor = self.config.provider.load_longitudinal_factors(CP.carFingerprint)
-    gas_alpha = self.config.provider.load_gas_alpha(CP.carFingerprint)
-    self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint, gas_alpha)
+    self.mvl_longitudinal = bool(CP.flags & HondaFlags.MVL_LONGITUDINAL and CP.openpilotLongitudinalControl and
+                                 not CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL)
+    self.learner = None
+    if not self.mvl_longitudinal:
+      gas_factor, wind_factor = self.config.provider.load_longitudinal_factors(CP.carFingerprint)
+      gas_alpha = self.config.provider.load_gas_alpha(CP.carFingerprint)
+      self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint, gas_alpha)
 
     self.system_flash_until = 0.0
     self.previous_set_speed = None
@@ -39,7 +45,9 @@ class HondaControllerFeatures:
     return self.learner.gasalpha
 
   def live_tuning(self) -> HondaLiveTuning:
-    return self.config.provider.get_live_tuning()
+    live = self.config.provider.get_live_tuning()
+    # Saved UI changes apply next startup, never halfway through a drive.
+    return replace(live, live_learning_gas=True) if self.mvl_longitudinal else live
 
   def update_system_speed_flash(self, CC, CS, hud_control):
     now = time.monotonic()

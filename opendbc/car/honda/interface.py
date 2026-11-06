@@ -44,7 +44,8 @@ class CarInterface(CarInterfaceBase):
     else:
       # NIDECs don't allow acceleration near cruise_speed,
       # so limit limits of pid to prevent windup
-      ecu_matched = bool(CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED and CP.openpilotLongitudinalControl and
+      ecu_matched = bool(CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED and not CP.flags & HondaFlags.MVL_LONGITUDINAL and
+                         CP.openpilotLongitudinalControl and
                          not CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL)
       ACCEL_MAX_VALS = [CarControllerParams.NIDEC_ACCEL_MAX, 0.4 if ecu_matched else 0.2]
       ACCEL_MAX_BP = [cruise_speed - (1.5 if ecu_matched else 2.), cruise_speed - .2]
@@ -365,8 +366,11 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _configure_params(ret: structs.CarParams, interface_config: SunnypilotCarConfig | None,
                         docs: bool) -> structs.CarParams:
-    ret.flags &= ~(HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL).value
-    if (interface_config is not None and not docs and ret.flags & HondaFlags.NIDEC and
+    ret.flags &= ~(HondaFlags.MVL_LONGITUDINAL | HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL).value
+    if (interface_config is not None and interface_config.honda.mvl_longitudinal and
+        ret.openpilotLongitudinalControl and not interface_config.honda.enforce_stock_longitudinal):
+      ret.flags |= HondaFlags.MVL_LONGITUDINAL.value
+    elif (interface_config is not None and not docs and ret.flags & HondaFlags.NIDEC and
         ret.openpilotLongitudinalControl and not interface_config.honda.enforce_stock_longitudinal):
       if interface_config.honda.nidec_pcm_mode == 1:
         ret.flags |= HondaFlags.NIDEC_PCM_ECU_MATCHED.value
@@ -507,7 +511,10 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= HondaFlagsSP.CLARITY_INTERCEPTOR_BRAKE_CAPABLE
 
     stock_cp.autoResumeSng = stock_cp.autoResumeSng or ret.enableGasInterceptor
-    if ret.enableGasInterceptor or ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL or not stock_cp.openpilotLongitudinalControl:
+    if ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL or not stock_cp.openpilotLongitudinalControl:
+      stock_cp.flags &= ~HondaFlags.MVL_LONGITUDINAL.value
+    if (ret.enableGasInterceptor or ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL or not stock_cp.openpilotLongitudinalControl or
+        stock_cp.flags & HondaFlags.MVL_LONGITUDINAL):
       stock_cp.flags &= ~(HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL).value
     stock_cp.minEnableSpeed = -1. if ret.enableGasInterceptor else stock_cp.minEnableSpeed
 
