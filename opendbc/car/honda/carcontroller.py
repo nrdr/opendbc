@@ -19,7 +19,6 @@ from opendbc.car.honda.nidec_pcm_constraints import NidecPCMConstraints, uses_ni
 from opendbc.car.honda.nidec_ecu_matched import EcuMatchedPCM
 from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
 from opendbc.car.honda.engine_braking import EngineBrakeFade, fresh_context
-from opendbc.car.honda.cruise_coast import CruiseCoast, coast_permission, propulsion_recovery_allowed, RECOVERY_HYSTERESIS_MS
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
@@ -253,9 +252,6 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.engine_brake_fade = EngineBrakeFade()
     self.engine_brake_washout = 0
     self.engine_brake_wire_shaped = False
-    self.cruise_coast = CruiseCoast()
-    self.cruise_coast_washout = 0
-    self.cruise_coast_wire_shaped = False
     self.guard_pcm_learner = self.nidec_pcm
     self.pcm_gas_sent = 0
     self.pcm_gas_previous_sent = 0
@@ -471,29 +467,13 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # After disabling shaping the plant is still answering the previous command
     # law. Do not teach/persist that response as an unshaped-command calibration.
     pcm_washout = self.pcm_constraints_washout > 0
-    coast_permitted = coast_permission(self.CP, self.CP_SP, CC, CC_SP, CS, now_nanos, self.launch_active)
-    self.cruise_coast.update(
-      now_ns=now_nanos, permitted=coast_permitted,
-      request=coast_permitted and CS.out.vEgo >= CC_SP.pcmCruiseCoastSetSpeed -
-              (RECOVERY_HYSTERESIS_MS if self.cruise_coast.coasting else 0.0),
-      engine=bool(CC_SP.pcmEngineBrakeEnabled), held_speed=self.pcm_speed_sent, held_gas=self.pcm_gas_sent,
-      braking=self.apply_brake_last > 0,
-      recovery_allowed=(CC_SP.pcmCruiseCoastVersion == 1 and civic_pcm.uses_civic_pcm(self.CP, self.CP_SP) and
-                        propulsion_recovery_allowed(CC, CS) and not self.launch_active),
-    )
-    coast_active = self.cruise_coast.active
-    self.cruise_coast_washout = (NIDEC_SERVO_LAG_FRAMES if coast_active or self.cruise_coast_wire_shaped
-                                 else max(0, self.cruise_coast_washout - 1))
-    # Versioned coast metadata owns both On/Off behavior. A denied new context
-    # must not fall back to the older, less restrictive engine-only permission.
-    engine_context = (CC_SP.pcmCruiseCoastVersion == 0 and civic_pcm.uses_civic_pcm(self.CP, self.CP_SP) and
-                      fresh_context(CC_SP, now_nanos))
+    engine_context = civic_pcm.uses_civic_pcm(self.CP, self.CP_SP) and fresh_context(CC_SP, now_nanos)
     engine_busy = self.engine_brake_fade.weight > 0 or (engine_context and CC_SP.pcmEngineBrakeRequest)
     self.engine_brake_washout = NIDEC_SERVO_LAG_FRAMES if engine_busy or self.engine_brake_wire_shaped else max(0, self.engine_brake_washout - 1)
-    engine_observing = self.engine_brake_washout > 0 or self.cruise_coast_washout > 0
+    engine_observing = self.engine_brake_washout > 0
     self.pcm_constraints_washout = NIDEC_SERVO_LAG_FRAMES if experimental_shaping else max(0, self.pcm_constraints_washout - 1)
     pcm_learning = (live.live_learning_gas and not self.civic_pcm_speed_control and not experimental_shaping and
-                    not pcm_washout and not self.ecu_matched_pcm and not engine_observing)
+                    not pcm_washout and not self.ecu_matched_pcm and self.engine_brake_washout == 0)
     # Near set speed the PCM's own governor, not our request, can be limiting acceleration.
     governor_start_speed = CS.out.cruiseState.speed - NIDEC_SET_SPEED_MARGIN
     set_speed_governed = pcm_learning and self.guard_pcm_learner and CS.out.vEgo >= governor_start_speed
@@ -555,16 +535,6 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           brake = self.nrdr.nidec_brake_authority(
             accel_cmd + hill_brake, brake, CS.out.vEgo, live.full_brake_authority and self.CP_SP.enableGasInterceptor,
           )
-      elif self.cruise_coast.coasting:
-        # Zero requested acceleration normally means speed-hold on a hill.
-        # The fresh cruise allowance explicitly requests coast instead. Remove
-        # only that hold-brake generation; retain grade for the gas mapping.
-        # The final coast stage independently caps propulsion to the held wire.
-        self.nidec_pid.reset()
-        self.nidec_pid_factor = 0.0
-        self.accel = float(actuators.accel)
-        adjust_accel = self.accel + hill_brake
-        brake, creep_impact = 0.0, 0.0
       elif self.civic_pcm_speed_control:
         # The PCM speed servo already closes the propulsion loop. A second,
         # negative-only acceleration integrator wound through that servo's lag
@@ -654,9 +624,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       # not PCM_GAS bytes. MVL computes its calibrated wire gas later.
       gas_fraction = max(float(self.accel if self.launch_active else adjust_accel) / 4.8 +
                          (0.0 if self.launch_active else float(creep_impact) * self.creep_factor), 0.0)
-      # Always advance the original transition timer; ignoring its output must
-      # not freeze a 200-ms interval and replay it at a later braking request.
-      ecu_coast = self.ecu_constraints.coast(gas_fraction, float(brake), CS.out.vEgo) and not self.cruise_coast.coasting
+      ecu_coast = self.ecu_constraints.coast(gas_fraction, float(brake), CS.out.vEgo)
       if ecu_coast:
         brake = 0.0
 
@@ -1338,8 +1306,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               apply_brake = int(np.clip(brake_fraction * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
           else:
             apply_brake = np.clip(self.brake_last - (wind_brake if self.nidec_wind_brake else 0.0), 0.0, 1.0)
-            if (apply_brake > 0) and not self.cruise_coast.coasting and (actuators.longControlState == LongCtrlState.pid) and \
-                (CS.out.vEgo > 1e-5) and (not CS.out.stockAeb):
+            if (apply_brake > 0) and (actuators.longControlState == LongCtrlState.pid) and (CS.out.vEgo > 1e-5) and (not CS.out.stockAeb):
                 if not ((self.accel >= 1e-5) and CS.out.vEgo < 1.0): # don't wind PID at launch lurch
                   self.brake_pid_factor = self.nidec_brake_pid.update(error = -(self.accel - CS.out.aEgo) * apply_brake, speed = CS.out.vEgo)
             if (CS.out.vEgo >= 2): # save pid above 2m/s
@@ -1423,12 +1390,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.brake = (brake_fraction if clarity_long else 0.0) if clarity_pedal else apply_brake / self.params.NIDEC_BRAKE_MAX
 
     engine_pcm_gas = self.new_accel
-    if CC_SP.pcmCruiseCoastVersion != 0:
-      self.engine_brake_fade.reset()
-      pcm_speed, engine_pcm_gas = self.cruise_coast.apply(
-        pcm_speed, self.new_accel, CS.out.vEgo, braking=self.apply_brake_last > 0,
-      )
-    elif civic_pcm.uses_civic_pcm(self.CP, self.CP_SP):
+    if civic_pcm.uses_civic_pcm(self.CP, self.CP_SP):
       # Last propulsion-only stage: never subtract from, delay, or replace a
       # brake request. Overrides and lead acquisition bypass the comfort fade.
       permitted = (engine_context and CC.longActive and CS.out.canValid and not CS.out.accFaulted and
@@ -1462,7 +1424,6 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             self.pcm_gas_sent = int(acc_hud_pcm_accel)
             self.pcm_speed_sent = pcm_speed
             self.engine_brake_wire_shaped = self.engine_brake_fade.weight > 0
-            self.cruise_coast_wire_shaped = self.cruise_coast.active
           can_sends.append(hondacan.create_acc_hud(self.packer, self.CAN.pt, self.CP, CC.enabled, pcm_speed, acc_hud_pcm_accel,
                                                    hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
                                                    self.CP.openpilotLongitudinalControl,
