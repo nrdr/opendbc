@@ -150,6 +150,12 @@ class CarControlSP:
   pcmEngineBrakeAllowed: bool = auto_field()
   pcmEngineBrakeRequest: bool = auto_field()
   pcmEngineBrakeMonoTime: int = auto_field()
+  pcmCruiseCoastAllowed: bool = auto_field()
+  pcmCruiseCoastSetSpeed: float = auto_field()
+  pcmCruiseCoastMaxSpeed: float = auto_field()
+  pcmCruiseCoastMonoTime: int = auto_field()
+  pcmEngineBrakeEnabled: bool = auto_field()
+  pcmCruiseCoastVersion: int = auto_field()
 
   @auto_dataclass
   class Param:
