@@ -6,6 +6,7 @@ import numpy as np
 
 from opendbc.car import DT_CTRL, rate_limit, structs
 from opendbc.car.honda.values import HONDA_BOSCH, HondaFlags
+from opendbc.car.honda.pcm_test_modes import qualified
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.sunnypilot.car.honda.longitudinal import LongGasLearner
 from opendbc.sunnypilot.car.runtime_config import HondaCarConfig, HondaLiveTuning
@@ -18,12 +19,14 @@ class HondaControllerFeatures:
     self.CP = CP
     self.CP_SP = CP_SP
     self.config = config
-    self.config.provider.initialize_live_learning_gas(CP_SP.enableGasInterceptor)
+    self.legacy_pcm = qualified(CP, CP_SP, HondaFlags.NIDEC_PCM_LEGACY)
+    if not self.legacy_pcm:
+      self.config.provider.initialize_live_learning_gas(CP_SP.enableGasInterceptor)
 
-    self.mvl_longitudinal = bool(CP.flags & HondaFlags.MVL_LONGITUDINAL and CP.openpilotLongitudinalControl and
+    self.mvl_longitudinal = bool(not self.legacy_pcm and CP.flags & HondaFlags.MVL_LONGITUDINAL and CP.openpilotLongitudinalControl and
                                  not CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL)
     self.learner = None
-    if not self.mvl_longitudinal:
+    if not self.mvl_longitudinal and not self.legacy_pcm:
       gas_factor, wind_factor = self.config.provider.load_longitudinal_factors(CP.carFingerprint)
       gas_alpha = self.config.provider.load_gas_alpha(CP.carFingerprint)
       self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint, gas_alpha)
@@ -46,6 +49,9 @@ class HondaControllerFeatures:
 
   def live_tuning(self) -> HondaLiveTuning:
     live = self.config.provider.get_live_tuning()
+    if self.legacy_pcm:
+      return replace(live, live_learning_gas=False, full_brake_authority=False, ecu_matched_long=False,
+                     roen_acceleration_limits=False)
     # Saved UI changes apply next startup, never halfway through a drive.
     return replace(live, live_learning_gas=True) if self.mvl_longitudinal else live
 

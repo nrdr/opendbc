@@ -6,6 +6,7 @@ Civic PCM feedback-deadzone experiment is explicitly separate from the baseline.
 See MVL_LONGITUDINAL.md for provenance and explicitly retained adaptations.
 """
 import math
+from opendbc.car.honda.pcm_test_modes import governor_speed
 from collections import deque
 
 import numpy as np
@@ -422,7 +423,8 @@ def prepare(self, CC, CS):
   # acceleration (see nidec_set_speed_governed), so no longitudinal learner may read the
   # response there. The gas channel has always been protected here; the CR-V showed the
   # speed channel needs it too.
-  set_speed_governed = nidec_set_speed_governed(CS.out.vEgo, CS.out.cruiseState.speed)
+  pcm_governor = governor_speed(getattr(self, "fixed_cruise", False), CS.out.cruiseState.speed)
+  set_speed_governed = nidec_set_speed_governed(CS.out.vEgo, pcm_governor)
 
   # wind brake from air resistance decel at high speed
   wind_brake = np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15]) * self.windfactor # not in m/s2 units
@@ -503,7 +505,7 @@ def prepare(self, CC, CS):
         brake, creep_impact = compute_gb_honda_nidec(adjust_accel, CS.out.vEgo, self.creep_factor)
       gas_error = self.accel - CS.out.aEgo
       if (actuators.longControlState == LongCtrlState.pid) and (not CS.out.stockAeb) and (not CS.out.gasPressed) \
-             and (1e-5 <= CS.out.vEgo <= CS.out.cruiseState.speed - 2.):
+             and (1e-5 <= CS.out.vEgo <= pcm_governor - 2.):
         self.creep_factor = 0.0
         # self.creep_factor = np.clip(self.creep_factor + 0.001 * creep_impact * gas_error, 0.0, 3.0)
   else:

@@ -61,6 +61,8 @@ class HondaCarConfig:
   provider: HondaConfigProvider
   nidec_pcm_mode: int = 0  # Startup only: upstream / ECU-matched / Civic experiment.
   nidec_wind_brake: bool = True
+  nidec_fixed_cruise: bool = False  # Startup only; independent Civic PCM experiment.
+  nidec_legacy_pcm: bool = False  # Startup only; takes precedence over saved MVL.
   clarity_interceptor_brake_bench: bool = False
   civic_pcm_wind_credit_bench: bool = False  # Off-device test injection only; not a driver setting.
   rdx_tjb_a220_transport_bench: bool = False

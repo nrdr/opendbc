@@ -42,6 +42,11 @@ class CarInterface(CarInterfaceBase):
     elif CP_SP.enableGasInterceptor:
       return CarControllerParams.NIDEC_ACCEL_MIN, CarControllerParams.NIDEC_ACCEL_MAX
     else:
+      if (CP.carFingerprint == CAR.HONDA_CIVIC and CP.flags & HondaFlags.NIDEC_PCM_FIXED_CRUISE and
+          CP.openpilotLongitudinalControl and not CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
+        # Only remove the artificial near-user-set-speed governor taper. Absolute
+        # actuator limits and the planner's speed/lead feedback remain unchanged.
+        return CarControllerParams.NIDEC_ACCEL_MIN, CarControllerParams.NIDEC_ACCEL_MAX
       # NIDECs don't allow acceleration near cruise_speed,
       # so limit limits of pid to prevent windup
       ecu_matched = bool(CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED and not CP.flags & HondaFlags.MVL_LONGITUDINAL and
@@ -366,7 +371,8 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _configure_params(ret: structs.CarParams, interface_config: SunnypilotCarConfig | None,
                         docs: bool) -> structs.CarParams:
-    ret.flags &= ~(HondaFlags.MVL_LONGITUDINAL | HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL).value
+    ret.flags &= ~(HondaFlags.MVL_LONGITUDINAL | HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL |
+                   HondaFlags.NIDEC_PCM_FIXED_CRUISE | HondaFlags.NIDEC_PCM_LEGACY).value
     if (interface_config is not None and interface_config.honda.mvl_longitudinal and
         ret.openpilotLongitudinalControl and not interface_config.honda.enforce_stock_longitudinal):
       ret.flags |= HondaFlags.MVL_LONGITUDINAL.value
@@ -376,6 +382,15 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= HondaFlags.NIDEC_PCM_ECU_MATCHED.value
       elif interface_config.honda.nidec_pcm_mode == 2 and ret.carFingerprint == CAR.HONDA_CIVIC:
         ret.flags |= HondaFlags.NIDEC_PCM_EXPERIMENTAL.value
+    # Hardware admission is completed in _get_params_sp after interceptor
+    # detection. Preserve the normal requested law until that check succeeds.
+    if (interface_config is not None and not docs and ret.carFingerprint == CAR.HONDA_CIVIC and
+        ret.openpilotLongitudinalControl and not ret.passive and not ret.dashcamOnly and
+        not interface_config.honda.enforce_stock_longitudinal):
+      if interface_config.honda.nidec_fixed_cruise:
+        ret.flags |= HondaFlags.NIDEC_PCM_FIXED_CRUISE.value
+      if interface_config.honda.nidec_legacy_pcm:
+        ret.flags |= HondaFlags.NIDEC_PCM_LEGACY.value
     if ret.carFingerprint in HONDA_BOSCH_A:
       ret.radarUnavailable = not _use_bosch_a_radar(ret.carFingerprint, docs, interface_config)
     return ret
@@ -513,6 +528,13 @@ class CarInterface(CarInterfaceBase):
     stock_cp.autoResumeSng = stock_cp.autoResumeSng or ret.enableGasInterceptor
     if ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL or not stock_cp.openpilotLongitudinalControl:
       stock_cp.flags &= ~HondaFlags.MVL_LONGITUDINAL.value
+    if (candidate != CAR.HONDA_CIVIC or ret.enableGasInterceptor or ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL or
+        not stock_cp.openpilotLongitudinalControl or docs or stock_cp.passive or stock_cp.dashcamOnly):
+      stock_cp.flags &= ~(HondaFlags.NIDEC_PCM_FIXED_CRUISE | HondaFlags.NIDEC_PCM_LEGACY).value
+    if stock_cp.flags & HondaFlags.NIDEC_PCM_LEGACY:
+      stock_cp.flags &= ~(HondaFlags.MVL_LONGITUDINAL | HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL).value
+    if stock_cp.flags & HondaFlags.NIDEC_PCM_FIXED_CRUISE:
+      ret.pcmCruiseSpeed = False  # Host target/buttons are independent of the car-side cruise field.
     if (ret.enableGasInterceptor or ret.flags & HondaFlagsSP.STOCK_LONGITUDINAL or not stock_cp.openpilotLongitudinalControl or
         stock_cp.flags & HondaFlags.MVL_LONGITUDINAL):
       stock_cp.flags &= ~(HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL).value

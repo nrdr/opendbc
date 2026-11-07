@@ -89,6 +89,8 @@ class HondaFlags(IntFlag):
   NIDEC_PCM_ECU_MATCHED = 32768
   NIDEC_PCM_EXPERIMENTAL = 65536
   MVL_LONGITUDINAL = 131072  # Immutable startup command law; not a safety flag.
+  NIDEC_PCM_FIXED_CRUISE = 262144  # Civic PCM experiment; not additional Panda authority.
+  NIDEC_PCM_LEGACY = 524288  # Isolated Kegman-style speed-feedback controller.
 
 
 # Car button codes
