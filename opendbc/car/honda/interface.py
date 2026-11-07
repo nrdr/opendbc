@@ -12,6 +12,7 @@ from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
 
 from opendbc.sunnypilot.car.honda.interface_ext import configure_honda_platform, configure_modified_eps
+from opendbc.sunnypilot.car.honda.icbm_eligibility import civic_icbm_available
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 from opendbc.sunnypilot.car.runtime_config import SunnypilotCarConfig
 
@@ -542,7 +543,8 @@ class CarInterface(CarInterfaceBase):
     stock_cp.minEnableSpeed = -1. if ret.enableGasInterceptor else stock_cp.minEnableSpeed
 
     ret.intelligentCruiseButtonManagementAvailable = candidate in (HONDA_BOSCH - HONDA_BOSCH_CANFD) or \
-                                                     (candidate in HONDA_BOSCH_CANFD and not is_release_sp)
+                                                      (candidate in HONDA_BOSCH_CANFD and not is_release_sp) or \
+                                                      civic_icbm_available(stock_cp, ret)
 
     return ret
 

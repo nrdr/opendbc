@@ -281,9 +281,11 @@ def spam_buttons_command(packer, CAN, cruise_button, cruise_setting, ambient_lig
   values = {
     'CRUISE_BUTTONS': cruise_button,
     'CRUISE_SETTING': cruise_setting,
-    # the camera consumes this byte too (adaptive high beam); echo the SCM's live value
-    'AMBIENT_LIGHT_MAYBE': ambient_light,
   }
+  # Civic Nidec's SCM_BUTTONS has no ambient-light field. All other platforms
+  # retain their existing payload; avoid an unknown-signal log per Civic press.
+  if CP.carFingerprint != CAR.HONDA_CIVIC:
+    values['AMBIENT_LIGHT_MAYBE'] = ambient_light
   if bus is None:
     # send buttons to camera on radarless (camera does ACC) cars
     bus = CAN.camera if CP.flags & HondaFlags.BOSCH_RADARLESS else CAN.pt

@@ -380,11 +380,25 @@ static bool honda_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // Stock-Nidec ICBM only adjusts an already engaged factory cruise session.
+  // Nidec controls_allowed can remain latched after ACC_STATUS falls: require
+  // the actual current cruise state too. No physical-button forwarding changes.
+  if ((honda_hw == HONDA_NIDEC) && (msg->addr == 0x296U) && (msg->bus == 2U)) {
+    const int button = (msg->data[0] >> 5) & 0x7U;
+    const int setting = (msg->data[0] >> 2) & 0x3U;
+    const bool stock_icbm = honda_stock_longitudinal && !enable_gas_interceptor && !honda_nidec_hybrid;
+    const bool adjust = ((button == HONDA_BTN_SET) || (button == HONDA_BTN_RESUME)) &&
+                        controls_allowed && cruise_engaged_prev && !gas_pressed && !brake_pressed;
+    if (!stock_icbm || (setting != 0) || ((button != HONDA_BTN_CANCEL) && !adjust)) {
+      tx = false;
+    }
+  }
+
   // OP is streaming SCM_BUTTONS to the camera: block the stock buttons from forwarding while this
   // stream stays fresh (see honda_bosch_fwd_hook). Topped up here so the block fails safe: if OP
   // stops sending (e.g. it refuses to engage while the panda's button state machine allowed controls),
   // the stock buttons resume forwarding within ~10 button frames (~0.4 s).
-  if (tx && (msg->addr == 0x296U) && (msg->bus == 2U)) {
+  if (tx && (honda_hw == HONDA_BOSCH) && (msg->addr == 0x296U) && (msg->bus == 2U)) {
     honda_op_buttons_fresh = 10;
   }
 
@@ -430,6 +444,7 @@ static safety_config honda_nidec_init(uint16_t param) {
   static CanMsg HONDA_N_STOCK_LONGITUDINAL_TX_MSGS[] = {
     HONDA_N_COMMON_TX_MSGS
     {0x1A6, 0, 8, .check_relay = false},
+    {0x296, 2, 4, .check_relay = false},  // Civic factory-ACC ICBM; physical SCM still forwards
   };
 
   static CanMsg HONDA_N_INTERCEPTOR_TX_MSGS[] = {

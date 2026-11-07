@@ -508,7 +508,7 @@ class TestHondaNidecAltGasInterceptorSafety(GasInterceptorSafetyTest, HondaButto
 
 
 class TestHondaNidecStockLongitudinalSafety(HondaPcmEnableBase, TestHondaNidecSafetyBase):
-  TX_MSGS = HONDA_N_COMMON_TX_MSGS + [[0x296, 0], ]
+  TX_MSGS = HONDA_N_COMMON_TX_MSGS + [[0x1A6, 0], [0x296, 2]]
   FWD_BLACKLISTED_ADDRS = {2: [0xE4, 0x194, 0x33D]}
   RELAY_MALFUNCTION_ADDRS = {0: (0xE4, 0x194, 0x33D)}
 

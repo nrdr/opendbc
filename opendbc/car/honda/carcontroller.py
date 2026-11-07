@@ -25,6 +25,7 @@ from opendbc.car.honda.pcm_test_modes import governor_speed, qualified
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
 from opendbc.sunnypilot.car.honda.icbm import IntelligentCruiseButtonManagementInterface
+from opendbc.sunnypilot.car.honda.icbm_eligibility import civic_icbm_available
 from opendbc.sunnypilot.car.honda.can import create_camera_message
 from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures
 from opendbc.sunnypilot.car.runtime_config import HondaCarConfig
@@ -1259,10 +1260,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         if self.frame % 2 == 0 and not (self.CP.flags & (HondaFlags.BOSCH_RADARLESS | HondaFlags.BOSCH_CANFD)) and not (self.CP.flags & HondaFlags.NIDEC):
           can_sends.append(hondacan.create_bosch_supplemental_1(self.packer, self.CAN))
         # If using stock ACC, spam cancel command to kill gas when OP disengages.
+        button_bus = (self.CAN.camera if civic_icbm_available(self.CP, self.CP_SP) and
+                      self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL else None)
         if pcm_cancel_cmd:
-          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.CANCEL, 0, CS.scm_ambient_light, self.CP))
+          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.CANCEL, 0, CS.scm_ambient_light, self.CP,
+                                                       bus=button_bus))
         elif CC.cruiseControl.resume:
-          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.RES_ACCEL, 0, CS.scm_ambient_light, self.CP))
+          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.RES_ACCEL, 0, CS.scm_ambient_light, self.CP,
+                                                       bus=button_bus))
 
       else:
         # Send gas and brake commands.
@@ -1577,7 +1582,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                      CS.scm_ambient_light, self.CP, bus=self.CAN.camera))
 
     # Intelligent Cruise Button Management
-    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer, self.frame,
+    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC, CC_SP, CS, self.packer, self.frame,
                                                                        self.last_button_frame, self.CAN))
 
     new_actuators = actuators.as_builder()
