@@ -1,7 +1,8 @@
 """Pinned MVL longitudinal law: opendbc 3fec9a418a659de31d7b1f494193161697a35071.
 
 The host controller retains lateral, HUD and hardware integration. These routines
-own ALL longitudinal computation in MVL mode; no live custom tuning is accepted.
+own ALL longitudinal computation in MVL mode. An off-by-default, startup-only
+Civic PCM feedback-deadzone experiment is explicitly separate from the baseline.
 See MVL_LONGITUDINAL.md for provenance and explicitly retained adaptations.
 """
 import math
@@ -19,6 +20,42 @@ from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarContro
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
+
+
+def pcm_deadzone_config(CP, CP_SP, mvl_enabled, value):
+  """Validate again at the controller boundary; unsupported configurations stay Off."""
+  if (not mvl_enabled or CP.carFingerprint != CAR.HONDA_CIVIC or not CP.openpilotLongitudinalControl or not CP.flags & HondaFlags.NIDEC
+      or CP.flags & HondaFlags.BOSCH or CP_SP.enableGasInterceptor or CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
+    return 0.0
+  if type(value) not in (int, float) or value not in (0.0, 0.02, 0.05, 0.10):
+    return 0.0
+  return float(value)
+
+
+def acceleration_deadzone(error, speed, maximum):
+  """Continuous deadband in m/s^2, not Toyota's historical speed-error deadband."""
+  if maximum == 0.0 or not math.isfinite(error) or not math.isfinite(speed):
+    return error
+  width = maximum * min(max((speed - 2.3) / (9.0 - 2.3), 0.0), 1.0)
+  if error > width:
+    return error - width
+  if error < -width:
+    return error + width
+  return 0.0
+
+
+def pcm_feedback_error(self, CC, CS, hill_brake):
+  error = CC.actuators.accel - CS.out.aEgo
+  # Off returns the original expression without touching any controller state.
+  # Do not mask corrective feedback while the plan, integral or grade asks for
+  # braking. Bypassing does NOT erase earlier integral/learner history.
+  if (self.mvl_pcm_deadzone == 0.0 or CC.actuators.longControlState != LongCtrlState.pid
+      or not CC.longActive or self.launch_active or CC.actuators.accel <= 0.0
+      or CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or CS.out.stockFcw
+      or self.apply_brake_last > 0 or self.last_applied_brake > 0.0 or self.brake_last > 0.0
+      or not CC.actuators.accel + min(self.nidec_pid.i, self.nidec_pid_factor) + hill_brake > 0.0):
+    return error
+  return acceleration_deadzone(error, CS.out.vEgo, self.mvl_pcm_deadzone)
 
 
 def compute_gb_honda_bosch(accel, speed):
@@ -408,7 +445,7 @@ def prepare(self, CC, CS):
          (CS.out.vEgo > 1e-5 or actuators.accel > 1e-5) \
          and (not CS.out.stockAeb) and (not CS.out.gasPressed):
         old_i = self.nidec_pid.i
-        self.nidec_pid_factor = self.nidec_pid.update(error = actuators.accel - CS.out.aEgo, speed = CS.out.vEgo)
+        self.nidec_pid_factor = self.nidec_pid.update(error = pcm_feedback_error(self, CC, CS, hill_brake), speed = CS.out.vEgo)
         if actuators.accel >= 1e-5 and CS.out.vEgo < 1.0: # don't drop PID at launch lurch
            self.nidec_pid_factor = self.nidec_pid.i = max(old_i, self.nidec_pid.i)
         self.accel = actuators.accel + self.nidec_pid_factor

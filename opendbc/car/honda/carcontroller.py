@@ -240,6 +240,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
     self.mvl_longitudinal = self.nrdr.mvl_longitudinal
     self.nidec_pcm = uses_nidec_pcm(CP, CP_SP)
+    self.mvl_pcm_deadzone = mvl_longitudinal.pcm_deadzone_config(CP, CP_SP, self.mvl_longitudinal, config.mvl_pcm_deadzone)
     self.civic_pcm = bool(not self.mvl_longitudinal and civic_pcm.uses_civic_pcm(CP, CP_SP) and CP.flags & HondaFlags.NIDEC_PCM_EXPERIMENTAL)
     self.ecu_matched_pcm = bool(not self.mvl_longitudinal and self.nidec_pcm and CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED)
     self.nidec_wind_brake = self.mvl_longitudinal or not self.nidec_pcm or config.nidec_wind_brake

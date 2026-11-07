@@ -100,6 +100,40 @@ Bosch, and interceptors, with live learning both OFF and ON.
 
 ## Explicit differences from the pinned donor
 
+### Optional Civic PCM feedback deadzone
+
+`HondaCarConfig.mvl_pcm_deadzone` is a startup-only experiment, default `0.0`.
+The host selector `NrdrMvlPcmDeadzone` stores `0`, `2`, `5`, or `10`, converted
+to `0.0`, `0.02`, `0.05`, or `0.10 m/s^2`. Unsupported values fail closed to
+Off at both boundaries. Only the exact Nidec `HONDA_CIVIC`, running MVL
+openpilot longitudinal without a gas interceptor, can enable it. Other Honda
+platforms, Bosch, interceptors, stock ACC and the non-MVL path are unchanged.
+
+Only the error passed into the existing `nidec_pid.update()` is transformed.
+The one-sided threshold is zero through 2.3 m/s, increases linearly to the
+selected maximum at 9 m/s, and stays there above 9 m/s. Errors inside
+`[-threshold, +threshold]` become zero; outside, the threshold is subtracted
+from the magnitude, preserving continuity. These are **acceleration-error**
+units, not the historical Toyota speed-error deadzone values.
+
+The transform is bypassed for nonpositive requested acceleration, non-PID
+states, launch, inactive longitudinal, driver gas/brake, stock AEB/FCW,
+previous/pending friction-brake demand, or nonpositive acceleration after the
+existing integral correction and grade term. Bypass passes the original error
+to the existing update, without changing baseline update/skip/reset rules.
+Planner requests, feedforward, command curves, interlocks, safety limits,
+personalities and learner equations are not changed.
+
+This is **not** PCM lag compensation or a throttle slew limiter. In-band error
+holds the existing integral rather than clearing it, and can slow its unwind.
+The threshold bounds error shaping, not accumulated command deviation.
+Controller history and learned values can consequently diverge and persist;
+the braking bypass does not guarantee identical braking trajectories after
+different histories. Off reproduces the pinned controller from **identical
+starting state**, not the counterfactual learned state of a drive without the
+experiment. No reset or automatic learner migration accompanies this option.
+Offline checks establish these software boundaries, not on-road smoothness.
+
 ### Host parameter storage and startup policy
 
 The donor directly reads Params and owns a paced writer thread. Here all
@@ -173,6 +207,7 @@ Run the self-contained differential/contract suite explicitly:
 
 ```sh
 pytest opendbc/car/honda/tests/test_mvl_priority.py -q
+pytest opendbc/car/honda/tests/test_mvl_pcm_deadzone.py -q
 ```
 
 Broader controller regressions:

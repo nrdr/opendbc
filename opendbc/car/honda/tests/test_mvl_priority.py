@@ -136,12 +136,13 @@ def donor():
   return controller, interface.CarInterface, MemoryParams
 
 
-def build(car=CAR.HONDA_CIVIC, interceptor=False, *, mvl=True, hostile=False, stock=False, alpha=True, saved=None, clarity_bench=False):
+def build(car=CAR.HONDA_CIVIC, interceptor=False, *, mvl=True, hostile=False, stock=False, alpha=True, saved=None, clarity_bench=False,
+          deadzone=0.0):
   config = make_test_car_config(honda_stock_longitudinal=stock)
   config = replace(config, honda=replace(
     config.honda, mvl_longitudinal=mvl, nidec_pcm_mode=2 if hostile else 0,
     nidec_wind_brake=not hostile, civic_pcm_wind_credit_bench=hostile,
-    clarity_interceptor_brake_bench=clarity_bench,
+    clarity_interceptor_brake_bench=clarity_bench, mvl_pcm_deadzone=deadzone,
   ))
   provider = config.honda.provider
   provider.live_tuning = replace(provider.live_tuning, live_learning_gas=not hostile,
