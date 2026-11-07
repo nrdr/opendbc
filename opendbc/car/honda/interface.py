@@ -382,10 +382,11 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= HondaFlags.NIDEC_PCM_ECU_MATCHED.value
       elif interface_config.honda.nidec_pcm_mode == 2 and ret.carFingerprint == CAR.HONDA_CIVIC:
         ret.flags |= HondaFlags.NIDEC_PCM_EXPERIMENTAL.value
-    # Hardware admission is completed in _get_params_sp after interceptor
-    # detection. Preserve the normal requested law until that check succeeds.
+    # Final admission is completed in _get_params_sp after interceptor detection
+    # and modified-EPS support clears the temporary dashcamOnly restriction.
+    # Preserve the normal requested law until that final eligibility check.
     if (interface_config is not None and not docs and ret.carFingerprint == CAR.HONDA_CIVIC and
-        ret.openpilotLongitudinalControl and not ret.passive and not ret.dashcamOnly and
+        ret.openpilotLongitudinalControl and not ret.passive and
         not interface_config.honda.enforce_stock_longitudinal):
       if interface_config.honda.nidec_fixed_cruise:
         ret.flags |= HondaFlags.NIDEC_PCM_FIXED_CRUISE.value
