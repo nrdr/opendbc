@@ -65,6 +65,22 @@ def speed_target(reference: float, requested_accel: float, acceleration_gain: fl
   return min(max(reference + gain * requested_accel, 0.0), 100.0)
 
 
+def speed_deadzone_target(target: float, speed: float, maximum: float) -> float:
+  """Continuous target-speed deadband: zero width at 0 m/s, full width at 9 m/s.
+
+  Inside the band request current speed, never a zero PCM target. This is a
+  setpoint transform for the factory speed servo, not a replacement PID.
+  """
+  if (type(maximum) not in (int, float) or not math.isfinite(maximum) or not 0.0 <= maximum <= 0.2
+      or not math.isfinite(target) or not math.isfinite(speed) or speed < 0.0):
+    return target
+  if maximum == 0.0:
+    return target
+  width = maximum * min(speed / 9.0, 1.0)
+  error = target - speed
+  return speed + math.copysign(max(abs(error) - width, 0.0), error)
+
+
 def gas_allowance(requested_accel: float, actual_accel: float, speed_lead: float, maximum: int) -> float:
   """Legacy-style PCM authority ceiling, not an inverse pedal-position target.
 

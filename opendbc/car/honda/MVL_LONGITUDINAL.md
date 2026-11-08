@@ -119,14 +119,30 @@ trained against an authority ceiling they do not control; the unused speed
 smoothing coefficient is likewise not trained. Stale references, override,
 AEB, braking and disengagement retain their propulsion-release precedence.
 
-The optional MVL feedback deadzone does not run through this different
-command adapter; its saved choice remains editable. Fixed PCM cruise speed,
+The old acceleration-feedback deadzone is no longer selected by the host.
+The new optional speed-target deadzone is applied only by this adapter.
+`NrdrPcmSpeedDeadzone` stores actual m/s: 0.00–0.20 in 0.01 increments,
+default 0.15. Its width ramps linearly from zero at 0 m/s to the selected
+maximum at 9 m/s. The transformed error is the final computed PCM speed
+target (including acceleration feedforward) minus measured vehicle speed.
+Within the band the target becomes current speed, never zero. Outside the
+band its width is subtracted continuously from the error magnitude. The
+separate gas-allowance calculation and raw friction-brake request are unchanged.
+Launch bypasses this transform; stopping, stale data and override/AEB releases
+retain precedence. When it changes a target, speed-gain/ceiling fitting is
+suspended rather than allowed to learn against the removed command. The lag
+history also records those samples as ineligible. This is a setpoint filter,
+not restoration of the legacy speed-error PID and not an overspeed allowance.
+The saved old acceleration-deadzone key is retained for downgrade compatibility
+but is neither migrated to speed units nor consumed by the current host. Fixed PCM cruise speed,
 Kegman legacy mode and Nidec Civic ICBM have been retired. Bosch/interceptor
 control and other platforms' ICBM are not selected into Civic shaping.
 
-### Optional Civic PCM feedback deadzone
+### Retired Civic acceleration-feedback deadzone (core regression reference)
 
-`HondaCarConfig.mvl_pcm_deadzone` is a startup-only experiment, default `0.0`.
+The current host always sets `HondaCarConfig.mvl_pcm_deadzone` to `0.0`.
+Its prior implementation and isolated regression tests remain for comparison;
+there is no current UI or remote-write entry point for it. Previously it was a startup-only experiment, default `0.0`.
 The host selector `NrdrMvlPcmDeadzone` stores `0`, `2`, `5`, or `10`, converted
 to `0.0`, `0.02`, `0.05`, or `0.10 m/s^2`. Unsupported values fail closed to
 Off at both boundaries. Only the exact Nidec `HONDA_CIVIC`, running MVL

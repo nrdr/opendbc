@@ -65,7 +65,8 @@ class HondaCarConfig:
   civic_pcm_wind_credit_bench: bool = False  # Off-device test injection only; not a driver setting.
   rdx_tjb_a220_transport_bench: bool = False
   mvl_longitudinal: bool = False  # HondaLiveLearningGas at startup; restart to change.
-  mvl_pcm_deadzone: float = 0.0  # Optional Civic PCM acceleration-error experiment (m/s^2); startup only.
+  mvl_pcm_deadzone: float = 0.0  # Legacy acceleration experiment; not selected by the host UI.
+  civic_pcm_speed_deadzone: float = 0.0  # Experimental PCM target-error deadband (m/s); startup only.
 
 
 @dataclass(frozen=True, slots=True)

@@ -471,6 +471,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Civic Experimental is a propulsion adapter, not a blanket learning veto.
     # Individual learners below still require authority over the command they fit.
     experimental_shaping = self.civic_pcm
+    speed_deadzone_changed = False
     pcm_learning = live.live_learning_gas and not self.ecu_matched_pcm and (not self.civic_pcm or (self.civic_pcm_speed_control and not (
       CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or CC.cruiseControl.cancel)))
     # Near set speed the PCM's own governor, not our request, can be limiting acceleration.
@@ -911,8 +912,13 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             # The propulsion gain preserves acceleration headroom, but is not an
             # inverse of the PCM's torque-off/coast response. Keep the planner's
             # falling reference and use only a bounded preview below zero accel.
-            speed_lead = (civic_pcm.speed_target(pcm_reference, pcm_shaped_accel, sf_eff) - CS.out.vEgo
-                          if pcm_reference is not None else -CS.out.vEgo)
+            target = civic_pcm.speed_target(pcm_reference, pcm_shaped_accel, sf_eff) if pcm_reference is not None else 0.0
+            # Keep raw braking, launch, stale-reference and override handling
+            # outside this optional speed-servo setpoint transform.
+            filtered_target = (civic_pcm.speed_deadzone_target(target, CS.out.vEgo, self.nrdr.config.civic_pcm_speed_deadzone)
+                               if pcm_reference is not None and actuators.longControlState == LongCtrlState.pid else target)
+            speed_deadzone_changed = filtered_target != target
+            speed_lead = filtered_target - CS.out.vEgo
           else:
             # The Civic gas/brake path already applies nidec_pid_factor. Applying
             # that correction to the speed servo too double-counted an accel
@@ -1026,9 +1032,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # speed-channel delay line and settled-response filter run every frame, gated or not: the frame the
         # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
         accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
-        speed_learning_observable = not self.civic_pcm_speed_control or civic_pcm.speed_learning_observable(
+        speed_learning_observable = not self.civic_pcm_speed_control or (not speed_deadzone_changed and civic_pcm.speed_learning_observable(
           pcm_reference, CS.out.vEgo, pcm_shaped_accel, float(actuators.accel), gas_wire_for_learning, self.params.NIDEC_GAS_MAX,
-        )
+        ))
         self.speed_cmd_hist.append((float(pcm_shaped_accel if self.civic_pcm_speed_control else actuators.accel if self.civic_pcm else self.accel),
                                     gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
                                     speed_learning_observable and (not self.civic_pcm or pcm_learning) and (not CS.out.gasPressed) and
