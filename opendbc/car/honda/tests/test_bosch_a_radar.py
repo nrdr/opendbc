@@ -10,7 +10,7 @@ from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.can_definitions import CanData
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.interface import CarInterface
-from opendbc.car.honda.radar_interface import (
+from opendbc.car.honda.bosch_a_radar import (
   BOSCH_A_AZIMUTH_SCALE_RAD,
   BOSCH_A_AUX_IDS,
   BOSCH_A_DBC_NAME,
@@ -104,7 +104,7 @@ def make_main_frames(slot, frame_idx, status, range_raw, angle_raw, life, track_
 
 
 def make_radar_interface():
-  return CarInterface.RadarInterface(CP, CP_SP)
+  return CarInterface.RadarInterface(CP, CP_SP).bosch_a
 
 
 def sweep(slot, frame_idx, status, range_raw, angle_raw, life, t_nanos, with_aux=False, aux_frame_idx=None,
@@ -164,7 +164,9 @@ class TestDbcBitGeometry:
   def test_all_slot_range_aliases_match_runtime_scale(self, slot):
     signal = self.dbc.msgs[BOSCH_A_MAIN_IDS[slot][0]].sigs['RANGE']
     assert signal.factor == BOSCH_A_RANGE_SCALE_M == 0.0625
-    assert signal.offset == BOSCH_A_RANGE_OFFSET_M == -3.0
+    # the DBC offset is documentation only (the parser recomputes range from RANGE_RAW with the per-car ROM offset)
+    assert signal.offset == -3.0
+    assert BOSCH_A_RANGE_OFFSET_M == -346.0 / 128.0
     for raw, expected in ((48, 0.0), (208, 10.0), (1000, 59.5), (1648, 100.0), (4094, 252.875)):
       decoded = get_raw_value(make_f0(range_raw=raw), signal)
       assert decoded * signal.factor + signal.offset == expected
@@ -583,16 +585,16 @@ class TestVrel:
                     direct_vrel_raw=800, direct_vrel_uncertainty_raw=80))
     rr = ri.update(sweep(0, 1, 0x7, 1010, 1024, 3, 50_000_000, with_aux=True,
                          direct_vrel_raw=800, direct_vrel_uncertainty_raw=80))
-    assert rr.points[0].vRel == pytest.approx((800 - 864) / 64.0)
+    assert rr.points[0].vRel == pytest.approx((800 - 864) / 72.0)
 
   def test_direct_aux_vrel_domain_and_sentinel(self):
-    assert _bosch_a_direct_vrel(0) == pytest.approx(-13.5)
-    assert _bosch_a_direct_vrel(BOSCH_A_DIRECT_VREL_MAX_RAW) == pytest.approx(13.5)
+    assert _bosch_a_direct_vrel(0) == pytest.approx(-12.0)
+    assert _bosch_a_direct_vrel(BOSCH_A_DIRECT_VREL_MAX_RAW) == pytest.approx(12.0)
     assert _bosch_a_direct_vrel(1729) is None
     assert _bosch_a_direct_vrel(BOSCH_A_DIRECT_VREL_INVALID) is None
     assert _bosch_a_direct_vrel(0x7FF) is None
     assert _bosch_a_direct_vrel(None) is None
-    assert _bosch_a_direct_vrel(0, BOSCH_A_DIRECT_VREL_MAX_UNCERTAINTY_RAW) == pytest.approx(-13.5)
+    assert _bosch_a_direct_vrel(0, BOSCH_A_DIRECT_VREL_MAX_UNCERTAINTY_RAW) == pytest.approx(-12.0)
     assert _bosch_a_direct_vrel(0, BOSCH_A_DIRECT_VREL_MAX_UNCERTAINTY_RAW + 1) is None
     assert _bosch_a_direct_vrel(864, 0x3FE) is None
     assert _bosch_a_direct_vrel(864, 0x3FF) is None
@@ -606,7 +608,7 @@ class TestVrel:
     assert len(ri._tracks[1].samples) == 1
 
   def test_fast_clean_range_rate_without_u11_or_ratio_withholds_rather_than_synthesizes(self):
-    # This range rate (~-46 m/s) is well outside native U11's representable domain ([-13.5, 13.5]
+    # This range rate (~-46 m/s) is well outside native U11's representable domain ([-12.0, 12.0]
     # m/s), so it can only ever have come from the raw one-sweep derivative -- which is exactly the
     # synthesized-measurement hazard this fix closes. With no aux at all (no U11, no ratio) and no
     # prior trusted velocity to coast, the point is correctly withheld rather than published at a
@@ -624,13 +626,13 @@ class TestVrel:
                     direct_vrel_raw=696, direct_vrel_uncertainty_raw=84))
     rr = ri.update(sweep(0, 1, 0x7, 1724, 1024, 3, 50_000_000, with_aux=True,
                    direct_vrel_raw=696, direct_vrel_uncertainty_raw=84))
-    assert rr.points[0].vRel == pytest.approx(-2.625)
+    assert rr.points[0].vRel == pytest.approx((696 - 864) / 72.0)
     # R146/S21 ID50's 19-count / 68.962 ms high-U10 step would have synthesized about -15.74 m/s.
     rr = ri.update(sweep(0, 2, 0x7, 1705, 1024, 5, 118_962_000, with_aux=True,
                    direct_vrel_raw=585, direct_vrel_uncertainty_raw=744))
     assert len(rr.points) == 1
     assert rr.points[0].dRel == pytest.approx(1705 * BOSCH_A_RANGE_SCALE_M + BOSCH_A_RANGE_OFFSET_M)
-    assert rr.points[0].vRel == pytest.approx(-2.625)
+    assert rr.points[0].vRel == pytest.approx((696 - 864) / 72.0)
     assert not rr.points[0].deprecated.measured
     assert len(ri._tracks[1].samples) == 2
 
@@ -644,9 +646,9 @@ class TestVrel:
               direct_vrel_raw=585, direct_vrel_uncertainty_raw=744))
     rr = ri.update(sweep(0, 3, 0x7, 980, 1024, 7, 150_000_000, with_aux=True,
                    direct_vrel_raw=760, direct_vrel_uncertainty_raw=84))
-    assert rr.points[0].vRel == pytest.approx((760 - 864) / 64.0)
+    assert rr.points[0].vRel == pytest.approx((760 - 864) / 72.0)
     assert rr.points[0].deprecated.measured
-    assert ri._tracks[1].last_trusted_vrel == pytest.approx((760 - 864) / 64.0)
+    assert ri._tracks[1].last_trusted_vrel == pytest.approx((760 - 864) / 72.0)
 
   def test_high_u10_coast_cannot_cross_lifecycle_incarnation(self):
     ri = make_radar_interface()
@@ -669,7 +671,11 @@ class TestVrel:
               direct_vrel_raw=585, direct_vrel_uncertainty_raw=744))
     rr = ri.update(sweep(0, 3, 0x7, 980, 1024, 7, 300_000_000, with_aux=True,
                    direct_vrel_raw=585, direct_vrel_uncertainty_raw=744))
-    assert len(rr.points) == 0
+    # Testing's D-041/D-042: a stale trusted velocity no longer deletes the point; the geometry keeps
+    # publishing with the held velocity, flagged measured=False.
+    assert len(rr.points) == 1
+    assert rr.points[0].vRel == pytest.approx((800 - 864) / 72.0)
+    assert not rr.points[0].deprecated.measured
 
   def test_range_ratio_conversion_and_sentinel(self):
     assert _bosch_a_range_ratio(500) == pytest.approx(1.0)
@@ -680,7 +686,7 @@ class TestVrel:
 
   @pytest.mark.parametrize(
     ('direct_raw', 'range_raw', 'rawca', 'expected'),
-    [(0, 974, 528, -13.5), (BOSCH_A_DIRECT_VREL_MAX_RAW, 1027, 472, 13.5)],
+    [(0, 974, 528, -12.0), (BOSCH_A_DIRECT_VREL_MAX_RAW, 1027, 472, 12.0)],
   )
   def test_range_ratio_does_not_extend_direct_vrel_rails(self, direct_raw, range_raw, rawca, expected):
     ri = make_radar_interface()
@@ -1114,7 +1120,7 @@ def test_bosch_a_observed_sweep_end_and_publish_trigger_are_distinct():
 
 
 def test_bosch_a_timing_contract():
-  assert BOSCH_A_FREQ_HZ == 15
+  assert BOSCH_A_FREQ_HZ == pytest.approx(14.35)
   assert BOSCH_A_STALE_S == pytest.approx(0.20)
 
 
@@ -1122,9 +1128,10 @@ def test_bosch_a_timing_contract():
 
 def test_civic_bosch_radar_dbc_wired_and_available():
   assert CP.radarUnavailable is False
-  ri = make_radar_interface()
+  ri = CarInterface.RadarInterface(CP, CP_SP)
   assert ri.bosch_a_radar is True
-  assert ri.rcp is not None
+  assert ri.bosch_a is not None
+  assert ri.rcp is ri.bosch_a.rcp
 
 
 def test_civic_bosch_object_feed_uses_camera_side_acc_can():
