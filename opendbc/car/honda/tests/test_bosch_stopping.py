@@ -15,6 +15,13 @@ def test_bosch_stop_follows_sent_acceleration_not_just_planner_state(car, has_re
   # Then check zero, negative, release without a state change, and pid with negative accel.
   cases = [("pid", .003, .003, 0), ("stopping", -.1, .001, 0), ("stopping", 0., 0., 1),
            ("stopping", -.1, -.002, 2), ("stopping", .25, .25, 0), ("pid", -.1, -.1, 0)]
+  if car == CAR.HONDA_CIVIC_BOSCH:
+    # Owner decision (Bosch-A port): on Bosch-A cars Testing's BoschLongitudinal replaces nrdr's brake_pid/stopping
+    # ramp, so the planner accel is sent as-is (and the last case runs through its brake onset/edge smoothing).
+    # The counter follows Testing's rule (SOURCE carcontroller l.257): every stopping frame counts, whatever the
+    # accel, so standstill holds through the positive-accel stopping frame. The last case's sent accel was observed.
+    cases = [("pid", .003, .003, 0), ("stopping", -.1, -.1, 1), ("stopping", 0., 0., 2),
+             ("stopping", -.1, -.1, 3), ("stopping", .25, .25, 4), ("pid", -.1, -0.07445255585395508, 0)]
   for frame, (state, accel, sent, expected_counter) in enumerate(cases):
     cc = control(accel)
     cc.actuators.longControlState = state

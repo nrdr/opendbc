@@ -80,6 +80,9 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
+BOSCH_STAR7_MIN_GAS_ACCEL = -0.2  # star7 BOSCH_GAS_LOOKUP_BP[0]
+
+
 def bosch_force_command_state(active: bool, gas_force: float) -> tuple[bool, bool]:
   """Classify the compensated command once so gas and brake can never overlap."""
   if not math.isfinite(gas_force):
@@ -87,11 +90,17 @@ def bosch_force_command_state(active: bool, gas_force: float) -> tuple[bool, boo
   return active and gas_force > 0.0, active and gas_force < 0.0
 
 
-def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_force):
+def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_force, braking=None):
   commands = []
 
   control_on = 5 if enabled else 0
-  gas_active, braking = bosch_force_command_state(active, gas_force)
+  if braking is None:
+    gas_active, braking = bosch_force_command_state(active, gas_force)
+  else:
+    # BoschLongitudinal (Bosch-A harness) owns the brake request (hysteresis, hold); gas is on only when it is off
+    # and the compensated force is above star7's gas floor. Same rule as Honda-PTM-Testing create_acc_commands.
+    braking = active and bool(braking)
+    gas_active = active and math.isfinite(gas_force) and gas_force > BOSCH_STAR7_MIN_GAS_ACCEL and not braking
   gas_command = gas if gas_active else -30000
   accel_command = accel if active else 0
   braking = int(braking)

@@ -8,6 +8,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, rate_limit, make_tester_present_msg, structs
 from opendbc.car.honda import hondacan
+from opendbc.car.honda.bosch_longitudinal import BoschLongitudinal, bosch_a_harness, qualified as bosch_long_qualified, star7_params
 from opendbc.car.honda.values import CAR, HONDA_BOSCH, CarControllerParams, CruiseButtons, CruiseSettings, HondaFlags
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.common.pid import PIDController
@@ -275,6 +276,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.last_torque = 0.0
     self.bosch_last_gas = 0
     self.last_applied_brake = 0.0
+    # Honda-PTM-Testing Bosch-A longitudinal (always on; no toggle). Runs on a qualified car with the Bosch-A radar
+    # harness active (CP.radarUnavailable False, i.e. nrdr's honda.bosch_a_radar). With MVL off it replaces nrdr's gas/wind
+    # factors and extra-brake controller; with MVL on it is only the gas learner (Civic Bosch), see mvl_longitudinal.
+    # Every other car keeps nrdr's path unchanged. The host sets bosch_learning_params (BoschLearningParams) to load and
+    # persist the learned factors, exactly like Testing's starpilot controller_extensions.
+    self.bosch_longitudinal = (BoschLongitudinal(CP, star7_params(CP, self.params))
+                               if bosch_a_harness(CP) and bosch_long_qualified(CP) else None)
+    self.bosch_learning_params = None
 
     self.lkas_button_send_remaining = 0
     self.last_lkas_button_frame = 0
@@ -488,6 +497,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       self.sat_excess_frames = self.sat_deficit_frames = 0
     if not self.mvl_longitudinal and (self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor):
       self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
+    if self.bosch_longitudinal is not None:
+      self.bosch_longitudinal.observe_orientation(CC.orientationNED)
     gas_pedal_force = 0.0
     min_gas = self.params.BOSCH_GAS_LOOKUP_BP[0]
     actuators = CC.actuators
@@ -1275,72 +1286,79 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           ts = self.frame * DT_CTRL
 
           if self.CP.flags & HondaFlags.BOSCH:
-            if not self.nrdr.replaces_longitudinal and (accel < 1e-3) and \
-                (CS.out.vEgo < 3.0) and not (-1e-3 < CS.out.vEgo < 1e-3):
-              brake_addon = self.brake_pid.update(error = accel - CS.out.aEgo, speed = CS.out.vEgo)
-              targetaccel = min(accel,accel + brake_addon)
-            elif self.nrdr.replaces_longitudinal:
-              self.brake_pid.reset()
-              targetaccel = accel
+            bosch_braking = None
+            if self.bosch_longitudinal is not None:
+              # Testing's BoschLongitudinal replaces the nrdr extra-brake controller, wind/gas factors and learner here
+              self.accel, self.gas, gas_pedal_force, bosch_braking = self.bosch_longitudinal.update(CC, CS, accel)
             else:
-              if self.brake_pid.i < 0.0:
-                self.brake_pid.i = min(0.0, self.brake_pid.i + 0.02) # release 1m/s2 @ 50hz
-              else:
+              if not self.nrdr.replaces_longitudinal and (accel < 1e-3) and \
+                  (CS.out.vEgo < 3.0) and not (-1e-3 < CS.out.vEgo < 1e-3):
+                brake_addon = self.brake_pid.update(error = accel - CS.out.aEgo, speed = CS.out.vEgo)
+                targetaccel = min(accel,accel + brake_addon)
+              elif self.nrdr.replaces_longitudinal:
                 self.brake_pid.reset()
-              targetaccel = min(accel,accel + self.brake_pid.i)
-            if actuators.longControlState == LongCtrlState.stopping:  # simulate the old stoppingDecelRate of 0.1 m/s^2/s @ 50hz
-              targetaccel = max(targetaccel, self.last_applied_brake - 0.002)
-            self.last_applied_brake = targetaccel
-            self.accel = float(np.clip(targetaccel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
-            raw_gas_pedal_force = targetaccel + wind_brake_ms2 * self.windfactor + hill_brake
-            gas_pedal_force = raw_gas_pedal_force + self.nrdr.gas_alpha
-
-            # live-learn gas pedal adjustments when openpilot is controlling gas
-            if not self.nrdr.replaces_longitudinal and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
-              gas_error = accel - CS.out.aEgo
-              if gas_error != 0.0 and gas_pedal_force > min_gas:
-                if self.CP.carFingerprint in (CAR.HONDA_INSIGHT, CAR.HONDA_CIVIC_BOSCH): # gas pedal reacts too slowly
-                  learn_speed = 150
-                elif self.CP.carFingerprint in (CAR.ACURA_RDX_3G, CAR.ACURA_RDX_3G_MMR): # Prevent overreacting to turbo lag
-                  learn_speed = 300
-                else:
-                  learn_speed = 50
-                self.gasfactor = np.clip(self.gasfactor + gas_error / learn_speed * (gas_pedal_force - min_gas), 0.01, 3.0)
-              if gas_error != 0.0 and (not CS.out.brakePressed) and (CS.out.vEgo > 0.0):
-                if self.CP.carFingerprint in (CAR.ACURA_RDX_3G, CAR.ACURA_RDX_3G_MMR): # Faster reaction
-                  wind_learn_speed = 100
-                else:
-                  wind_learn_speed = 1000
-                wind_adjust = 1 + wind_brake_ms2 / wind_learn_speed
-                self.windfactor = np.clip(self.windfactor * (wind_adjust if (gas_error > 0) else 1.0/wind_adjust), 0.1, 3.0)
-              if gas_pedal_force <= min_gas: # don't reduce windfactor while braking, allow increases
-                self.windfactor = max(self.windfactor, self.windfactor_before_brake)
+                targetaccel = accel
               else:
-                self.windfactor_before_brake = self.windfactor
-              if gas_pedal_force >= self.params.BOSCH_ACCEL_MAX: # don't increase gasfactor nor windfactor at accel max, allow decreases
-                self.gasfactor = min(self.gasfactor, self.gasfactor_before_gasmax)
-                self.windfactor = min(self.windfactor, self.windfactor_before_gasmax)
-              else:
-                self.gasfactor_before_gasmax = self.gasfactor
-                self.windfactor_before_gasmax = self.windfactor
-            self.gasfactor, self.windfactor = self.nrdr.update_bosch_learner(
-              CC, CS, actuators, accel, gas_pedal_force, wind_brake_ms2, self.pitch, self.params, live.live_learning_gas,
-            )
-            self.gas = float(np.interp((gas_pedal_force - min_gas) * self.gasfactor + min_gas,
-                                       self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
+                if self.brake_pid.i < 0.0:
+                  self.brake_pid.i = min(0.0, self.brake_pid.i + 0.02) # release 1m/s2 @ 50hz
+                else:
+                  self.brake_pid.reset()
+                targetaccel = min(accel,accel + self.brake_pid.i)
+              if actuators.longControlState == LongCtrlState.stopping:  # simulate the old stoppingDecelRate of 0.1 m/s^2/s @ 50hz
+                targetaccel = max(targetaccel, self.last_applied_brake - 0.002)
+              self.last_applied_brake = targetaccel
+              self.accel = float(np.clip(targetaccel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
+              raw_gas_pedal_force = targetaccel + wind_brake_ms2 * self.windfactor + hill_brake
+              gas_pedal_force = raw_gas_pedal_force + self.nrdr.gas_alpha
 
-            # limit gas ramp to 60 units per frame, matches stock.  Higher sometimes causes powertrain to ignore gas command.
-            max_gas = max(60, self.bosch_last_gas + 60)
-            self.gas = min(self.gas, max_gas)
-            self.bosch_last_gas = self.gas
+              # live-learn gas pedal adjustments when openpilot is controlling gas
+              if not self.nrdr.replaces_longitudinal and (actuators.longControlState == LongCtrlState.pid) and (not CS.out.gasPressed):
+                gas_error = accel - CS.out.aEgo
+                if gas_error != 0.0 and gas_pedal_force > min_gas:
+                  if self.CP.carFingerprint in (CAR.HONDA_INSIGHT, CAR.HONDA_CIVIC_BOSCH): # gas pedal reacts too slowly
+                    learn_speed = 150
+                  elif self.CP.carFingerprint in (CAR.ACURA_RDX_3G, CAR.ACURA_RDX_3G_MMR): # Prevent overreacting to turbo lag
+                    learn_speed = 300
+                  else:
+                    learn_speed = 50
+                  self.gasfactor = np.clip(self.gasfactor + gas_error / learn_speed * (gas_pedal_force - min_gas), 0.01, 3.0)
+                if gas_error != 0.0 and (not CS.out.brakePressed) and (CS.out.vEgo > 0.0):
+                  if self.CP.carFingerprint in (CAR.ACURA_RDX_3G, CAR.ACURA_RDX_3G_MMR): # Faster reaction
+                    wind_learn_speed = 100
+                  else:
+                    wind_learn_speed = 1000
+                  wind_adjust = 1 + wind_brake_ms2 / wind_learn_speed
+                  self.windfactor = np.clip(self.windfactor * (wind_adjust if (gas_error > 0) else 1.0/wind_adjust), 0.1, 3.0)
+                if gas_pedal_force <= min_gas: # don't reduce windfactor while braking, allow increases
+                  self.windfactor = max(self.windfactor, self.windfactor_before_brake)
+                else:
+                  self.windfactor_before_brake = self.windfactor
+                if gas_pedal_force >= self.params.BOSCH_ACCEL_MAX: # don't increase gasfactor nor windfactor at accel max, allow decreases
+                  self.gasfactor = min(self.gasfactor, self.gasfactor_before_gasmax)
+                  self.windfactor = min(self.windfactor, self.windfactor_before_gasmax)
+                else:
+                  self.gasfactor_before_gasmax = self.gasfactor
+                  self.windfactor_before_gasmax = self.windfactor
+              self.gasfactor, self.windfactor = self.nrdr.update_bosch_learner(
+                CC, CS, actuators, accel, gas_pedal_force, wind_brake_ms2, self.pitch, self.params, live.live_learning_gas,
+              )
+              self.gas = float(np.interp((gas_pedal_force - min_gas) * self.gasfactor + min_gas,
+                                         self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
 
-            stopping = actuators.longControlState == LongCtrlState.stopping and self.accel <= 0.0
+              # limit gas ramp to 60 units per frame, matches stock.  Higher sometimes causes powertrain to ignore gas command.
+              max_gas = max(60, self.bosch_last_gas + 60)
+              self.gas = min(self.gas, max_gas)
+              self.bosch_last_gas = self.gas
+            # Testing's actuator path counts stopping on the state alone (SOURCE carcontroller l.257);
+            # nrdr's extra accel <= 0 condition stays for every other Bosch car.
+            stopping = actuators.longControlState == LongCtrlState.stopping and \
+              (self.bosch_longitudinal is not None or self.accel <= 0.0)
             self.stopping_counter = self.stopping_counter + 1 if stopping else 0
             # CAN FD: never overlap the stock radar's own ACC_CONTROL stream; ours starts within a few
             # frames of the radar going silent (see the deferred radar disable above)
             if not (self.CP.flags & HondaFlags.BOSCH_CANFD and CS.stock_acc_alive):
               can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, CC.enabled, CC.longActive, self.accel, self.gas,
-                                                            self.stopping_counter, self.CP, gas_pedal_force))
+                                                            self.stopping_counter, self.CP, gas_pedal_force, braking=bosch_braking))
           elif not (self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL):
             if self.CP_SP.enableGasInterceptor:
               brake_fraction = self.nrdr.nidec_brake_command(self.brake_last, wind_brake, live.full_brake_authority and not clarity_pedal)
@@ -1597,6 +1615,11 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
     if self.mvl_longitudinal:
       mvl_longitudinal.persist(self, self.nrdr.config.provider)
+      if self.bosch_longitudinal is not None and self.bosch_learning_params is not None:
+        self.bosch_learning_params.persist(self.frame)  # MVL on: only the Civic gas learner is Testing's
+    elif self.bosch_longitudinal is not None:
+      if self.bosch_learning_params is not None:
+        self.bosch_learning_params.persist(self.frame)
     elif not self.legacy_pcm and self.frame % 6000 == 0:
       if self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor:
         self.nrdr.persist()
