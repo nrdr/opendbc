@@ -104,7 +104,10 @@ def test_wind_setting_changes_pcm_friction_credit_only(mode):
     for ci in (on, off):
       ci.apply(control(-1.).as_reader(), structs.CarControlSP(), tick * 10_000_000)
   assert on.CC.windfactor == off.CC.windfactor == 3.
-  assert off.CC.apply_brake_last > on.CC.apply_brake_last
+  if mode == 2:
+    assert off.CC.apply_brake_last == on.CC.apply_brake_last > 0
+  else:
+    assert off.CC.apply_brake_last > on.CC.apply_brake_last
   assert on.CC.nidec_pid_factor == off.CC.nidec_pid_factor
 
 

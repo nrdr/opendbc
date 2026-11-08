@@ -137,10 +137,10 @@ def donor():
 
 
 def build(car=CAR.HONDA_CIVIC, interceptor=False, *, mvl=True, hostile=False, stock=False, alpha=True, saved=None, clarity_bench=False,
-          deadzone=0.0):
+          deadzone=0.0, pcm_mode=None):
   config = make_test_car_config(honda_stock_longitudinal=stock)
   config = replace(config, honda=replace(
-    config.honda, mvl_longitudinal=mvl, nidec_pcm_mode=2 if hostile else 0,
+    config.honda, mvl_longitudinal=mvl, nidec_pcm_mode=(2 if hostile else 0) if pcm_mode is None else pcm_mode,
     nidec_wind_brake=not hostile, civic_pcm_wind_credit_bench=hostile,
     clarity_interceptor_brake_bench=clarity_bench, mvl_pcm_deadzone=deadzone,
   ))
@@ -287,7 +287,7 @@ def test_pinned_donor_replay(donor, car, interceptor, seeded):
 @pytest.mark.parametrize("car,interceptor", [(CAR.HONDA_CIVIC, False), (CAR.HONDA_CIVIC_BOSCH, False), (CAR.ACURA_ILX, True)])
 def test_hostile_custom_settings_and_mid_drive_toggle_cannot_change_mvl(car, interceptor):
   normal, config, _ = build(car, interceptor)
-  hostile, bad_config, _ = build(car, interceptor, hostile=True)
+  hostile, bad_config, _ = build(car, interceptor, hostile=True, pcm_mode=1)
   assert normal.CC.nrdr.learner is hostile.CC.nrdr.learner is None
   assert not hostile.CC.civic_pcm and not hostile.CC.ecu_matched_pcm
   assert hostile.CC.nidec_wind_brake
@@ -315,7 +315,8 @@ def test_all_honda_startup_flags_and_safety_are_isolated(car):
     legacy, _, _ = build(car, interceptor, mvl=False)
     ci, config, fp = build(car, interceptor, hostile=True)
     assert ci.CP.flags & HondaFlags.MVL_LONGITUDINAL
-    assert not ci.CP.flags & (HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL)
+    assert not ci.CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED
+    assert bool(ci.CP.flags & HondaFlags.NIDEC_PCM_EXPERIMENTAL) is (car == CAR.HONDA_CIVIC and not interceptor)
     assert ci.CC.mvl_longitudinal
     assert [s.to_dict() for s in ci.CP.safetyConfigs] == [s.to_dict() for s in legacy.CP.safetyConfigs]
     assert ci.CP_SP.safetyParam == legacy.CP_SP.safetyParam
@@ -423,7 +424,7 @@ def test_qualified_clarity_hardware_hold_and_override_protections():
 
 
 @pytest.mark.parametrize("car,interceptor,mode", [
-  (CAR.HONDA_CIVIC, False, 0), (CAR.HONDA_CIVIC, False, 1), (CAR.HONDA_CIVIC, False, 2),
+  (CAR.HONDA_CIVIC, False, 0), (CAR.HONDA_CIVIC, False, 1),
   (CAR.HONDA_CLARITY, False, 0), (CAR.ACURA_ILX, True, 0), (CAR.HONDA_CLARITY, True, 0),
   (CAR.HONDA_CIVIC_BOSCH, False, 0), (CAR.HONDA_CIVIC_2022, False, 0),
 ])

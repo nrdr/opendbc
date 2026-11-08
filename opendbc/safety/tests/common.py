@@ -1053,6 +1053,11 @@ class SafetyTest(SafetyTestBase):
             if attr == 'TestVolkswagenMqbLongSafety' and current_test.startswith('TestHondaBoschCANFD'):
               tx = list(filter(lambda m: m[0] not in [0x30c, ], tx))
 
+            # Nidec stock/openpilot longitudinal modes share SCM_BUTTONS on bus 0.
+            # This is already covered by each mode's own allowed-message checks.
+            if attr == 'TestHondaNidecStockLongitudinalSafety' and current_test.startswith('TestHondaNidec'):
+              tx = list(filter(lambda m: m[:2] != [0x1A6, 0], tx))
+
             # TODO: Temporary, should be fixed in panda firmware, safety_honda.h
             if attr.startswith('TestHonda'):
               # exceptions for common msgs across different hondas

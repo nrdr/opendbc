@@ -20,13 +20,10 @@ from opendbc.car.honda.nidec_pcm_constraints import NidecPCMConstraints, uses_ni
 from opendbc.car.honda.nidec_ecu_matched import EcuMatchedPCM
 from opendbc.car.honda.nidec_long_helpers import nidec_speed_lead_mps
 from opendbc.car.honda import mvl_longitudinal
-from opendbc.car.honda.legacy_pcm import LegacyPCMController
-from opendbc.car.honda.pcm_test_modes import governor_speed, qualified
 
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
 from opendbc.sunnypilot.car.honda.icbm import IntelligentCruiseButtonManagementInterface
-from opendbc.sunnypilot.car.honda.icbm_eligibility import civic_icbm_available
 from opendbc.sunnypilot.car.honda.can import create_camera_message
 from opendbc.sunnypilot.car.honda.controller_features import HondaControllerFeatures
 from opendbc.sunnypilot.car.runtime_config import HondaCarConfig
@@ -243,20 +240,17 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.tja_control = bool(CP.flags & HondaFlags.BOSCH_TJA_CONTROL)
     self.nrdr = HondaControllerFeatures(CP, CP_SP, config)
     self.mvl_longitudinal = self.nrdr.mvl_longitudinal
-    self.legacy_pcm = self.nrdr.legacy_pcm
-    self.fixed_cruise = qualified(CP, CP_SP, HondaFlags.NIDEC_PCM_FIXED_CRUISE)
     self.nidec_pcm = uses_nidec_pcm(CP, CP_SP)
     self.mvl_pcm_deadzone = mvl_longitudinal.pcm_deadzone_config(CP, CP_SP, self.mvl_longitudinal, config.mvl_pcm_deadzone)
-    self.civic_pcm = bool(not self.mvl_longitudinal and civic_pcm.uses_civic_pcm(CP, CP_SP) and CP.flags & HondaFlags.NIDEC_PCM_EXPERIMENTAL)
+    self.civic_pcm = bool(civic_pcm.uses_civic_pcm(CP, CP_SP) and CP.flags & HondaFlags.NIDEC_PCM_EXPERIMENTAL)
     self.ecu_matched_pcm = bool(not self.mvl_longitudinal and self.nidec_pcm and CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED)
-    self.nidec_wind_brake = not self.legacy_pcm and (self.mvl_longitudinal or not self.nidec_pcm or config.nidec_wind_brake)
-    self.civic_wind_trial = civic_pcm.WindCreditTrial() if self.civic_pcm and config.civic_pcm_wind_credit_bench else None
+    self.nidec_wind_brake = not self.civic_pcm and (self.mvl_longitudinal or not self.nidec_pcm or config.nidec_wind_brake)
+    self.civic_wind_trial = civic_pcm.WindCreditTrial() if self.civic_pcm and self.nidec_wind_brake and config.civic_pcm_wind_credit_bench else None
     self.keep_pcm_acc = clarity_braking.qualified(CP, CP_SP)
     self.clarity_hold = clarity_braking.StandstillHold()
     self.civic_pcm_speed_control = False
     self.pcm_constraints = NidecPCMConstraints()
     self.ecu_constraints = EcuMatchedPCM()
-    self.pcm_constraints_washout = 0
     self.guard_pcm_learner = self.nidec_pcm
     self.pcm_gas_sent = 0
     self.pcm_gas_previous_sent = 0
@@ -289,11 +283,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.last_lkas_button_frame = 0
     self.radar_disable_counter = 0
 
-    if self.legacy_pcm:
-      self.legacy_controller = LegacyPCMController()
-      self.launch_active = False
-      self.new_accel = 0.0
-    elif self.mvl_longitudinal:
+    if self.mvl_longitudinal:
       mvl_longitudinal.initialize(self, config.provider)
     else:
       self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
@@ -478,23 +468,14 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     )
     if civic_wait_for_drive:
       self.launch_active = False
-    # The Civic candidate uses PCM_GAS as an allowance. The existing MVL PCM
-    # identifiers assume a pedal-position target and must not learn/persist
-    # against this different command law. Keep their saved state untouched.
-    # The former live bool now belongs exclusively to the experimental path.
-    # ECU-Matched uses the original donor algorithm, not this positive-only filter.
+    # Civic Experimental is a propulsion adapter, not a blanket learning veto.
+    # Individual learners below still require authority over the command they fit.
     experimental_shaping = self.civic_pcm
-    # After disabling shaping the plant is still answering the previous command
-    # law. Do not teach/persist that response as an unshaped-command calibration.
-    pcm_washout = self.pcm_constraints_washout > 0
-    self.pcm_constraints_washout = NIDEC_SERVO_LAG_FRAMES if experimental_shaping else max(0, self.pcm_constraints_washout - 1)
-    pcm_learning = (not self.legacy_pcm and live.live_learning_gas and not self.civic_pcm_speed_control and not experimental_shaping and
-                    not pcm_washout and not self.ecu_matched_pcm)
+    pcm_learning = live.live_learning_gas and not self.ecu_matched_pcm and (not self.civic_pcm or (self.civic_pcm_speed_control and not (
+      CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or CC.cruiseControl.cancel)))
     # Near set speed the PCM's own governor, not our request, can be limiting acceleration.
-    governor_start_speed = governor_speed(self.fixed_cruise, CS.out.cruiseState.speed) - NIDEC_SET_SPEED_MARGIN
+    governor_start_speed = CS.out.cruiseState.speed - NIDEC_SET_SPEED_MARGIN
     set_speed_governed = pcm_learning and self.guard_pcm_learner and CS.out.vEgo >= governor_start_speed
-    if experimental_shaping or pcm_washout:
-      self.sat_excess_frames = self.sat_deficit_frames = 0
     if not self.mvl_longitudinal and (self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor):
       self.gasfactor, self.windfactor = self.nrdr.longitudinal_factors
     if self.bosch_longitudinal is not None:
@@ -528,13 +509,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if clarity_pedal and not clarity_long:
       pcm_cancel_cmd = pcm_cancel_cmd or CS.pcm_acc_active
 
-    if self.legacy_pcm:
-      # The host supplies legacy PI brake and its matching selected-plan speed.
-      # No grade/wind credit, saved calibration, acceleration-error PI or learner.
-      accel, gas, brake = float(actuators.accel), 0.0, float(actuators.brake)
-      wind_brake = hill_brake = prior_windfactor = adjust_accel = 0.0
-      self.accel = accel
-    elif self.mvl_longitudinal:
+    if self.mvl_longitudinal and not self.civic_pcm:
       accel, gas, brake, wind_brake, hill_brake, prior_windfactor, set_speed_governed, adjust_accel = mvl_longitudinal.prepare(self, CC, CS)
     else:
       if len(CC.orientationNED) == 3:
@@ -681,8 +656,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       if not clarity_long:
         gas, brake = 0.0, 0.0
       brake = self.clarity_hold.update(brake, CS.out.standstill, clarity_long and actuators.longControlState == LongCtrlState.stopping)
-    if not self.legacy_pcm:
-      pre_limit_brake, self.braking, self.brake_steady = actuator_hysteresis(brake, self.braking, self.brake_steady)
+    pre_limit_brake, self.braking, self.brake_steady = actuator_hysteresis(brake, self.braking, self.brake_steady)
 
     # *** rate limit after the enable check ***
     brake_rate_up = live.stopping_decel_rate if actuators.longControlState == LongCtrlState.stopping else 3.0
@@ -692,8 +666,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       brake_rate_up = 1.0  # calibration measured with a 1.0 brake fraction/s rise
     if ecu_active:
       brake_rate_up = 1.0
-    if not self.legacy_pcm:
-      self.brake_last = rate_limit(pre_limit_brake, self.brake_last, -0.012 if ecu_active else -2., brake_rate_up * DT_CTRL)
+    self.brake_last = rate_limit(pre_limit_brake, self.brake_last, -0.012 if ecu_active else -2., brake_rate_up * DT_CTRL)
 
     # vehicle hud display, wait for one update from 10Hz 0x304 msg
     alert_fcw, alert_steer_required = process_hud_alert(hud_control.visualAlert)
@@ -796,28 +769,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Send steering command.
     can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, lkas_active, self.tja_control))
 
-    if self.legacy_pcm:
-      legacy_active = (CC.enabled and CC.longActive and CS.out.canValid and not CS.out.accFaulted and
-                       actuators.longControlState != LongCtrlState.off)
-      command = self.legacy_controller.update(
-        active=legacy_active, v_ego=CS.out.vEgo, a_ego=CS.out.aEgo,
-        v_target=float(actuators.speed), a_target=float(actuators.accel), brake=brake,
-        # The modern CarState no longer publishes the old speedometer offset.
-        speed_offset=0.0, send_brake=self.frame % 2 == 0,
-        cancel=pcm_cancel_cmd, gas_pressed=CS.out.gasPressed, brake_pressed=CS.out.brakePressed,
-        stock_aeb=CS.out.stockAeb, gas_max=self.params.NIDEC_GAS_MAX, brake_max=self.params.NIDEC_BRAKE_MAX,
-      )
-      pcm_speed, pcm_accel = command.pcm_speed, command.pcm_accel
-      self.new_accel = pcm_accel
-      self.brake_last = command.brake_fraction
-      self.brake = command.apply_brake / self.params.NIDEC_BRAKE_MAX
-      self.apply_brake_last = command.apply_brake
-      if self.frame % 2 == 0:
-        can_sends.append(hondacan.create_brake_command(
-          self.packer, self.CAN, command.apply_brake, command.pump_on, CC.longActive or CS.out.stockAeb,
-          pcm_cancel_cmd, alert_fcw, CS.stock_brake, self.CP_SP, clear_dash_faults=live.clear_dash_faults,
-        ))
-    elif self.mvl_longitudinal:
+    if self.mvl_longitudinal and not self.civic_pcm:
       pcm_speed, pcm_accel = mvl_longitudinal.commands(
         self, CC, CS, accel, gas, brake, wind_brake, hill_brake, prior_windfactor,
         set_speed_governed, pcm_cancel_cmd, alert_fcw, can_sends, adjust_accel,
@@ -1057,8 +1009,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.prior_gas_average = self.prior_gas_average * (1 - effective_average_factor) + (self.new_accel * effective_average_factor)
 
         gas_wire_for_learning = self.pcm_gas_sent if self.civic_pcm else self.new_accel
-        if pcm_learning and CC.longActive and (0 < gas_wire_for_learning < self.params.NIDEC_GAS_MAX) and (not CS.out.gasPressed) and \
-             (self.apply_brake_last == 0) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
+        # The allowance path does not consume gas-factor/offset tables; do not train unused knobs.
+        if pcm_learning and not self.civic_pcm_speed_control and CC.longActive and (0 < gas_wire_for_learning < self.params.NIDEC_GAS_MAX) and \
+             (not CS.out.gasPressed) and (self.apply_brake_last == 0) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
           gasfactor_error = (self.accel - CS.out.aEgo)
           # the 0<wire<198 gate above is the gas channel's own observability condition (a pinned
           # wire cannot show what more gasfactor would do); the clip is a runaway backstop only.
@@ -1073,11 +1026,15 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # speed-channel delay line and settled-response filter run every frame, gated or not: the frame the
         # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
         accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
-        self.speed_cmd_hist.append((float(actuators.accel if self.civic_pcm else self.accel), gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
-                                    not experimental_shaping and (not CS.out.gasPressed) and
+        speed_learning_observable = not self.civic_pcm_speed_control or civic_pcm.speed_learning_observable(
+          pcm_reference, CS.out.vEgo, pcm_shaped_accel, float(actuators.accel), gas_wire_for_learning, self.params.NIDEC_GAS_MAX,
+        )
+        self.speed_cmd_hist.append((float(pcm_shaped_accel if self.civic_pcm_speed_control else actuators.accel if self.civic_pcm else self.accel),
+                                    gas_wire_for_learning >= self.params.NIDEC_GAS_MAX,
+                                    speed_learning_observable and (not self.civic_pcm or pcm_learning) and (not CS.out.gasPressed) and
                                     (self.apply_brake_last == 0) and CC.longActive and (not self.launch_active) and (self.gas_recovery_ticks == 0)))
         self.a_ego_filt += NIDEC_AEGO_FILTER_ALPHA * (CS.out.aEgo - self.a_ego_filt)
-        if pcm_learning and (not CS.out.gasPressed) and (self.apply_brake_last == 0): # adjust speedfactor and average_factor
+        if pcm_learning and speed_learning_observable and (not CS.out.gasPressed) and (self.apply_brake_last == 0): # adjust speedfactor and average_factor
           # errors are against the lagged command (see NIDEC_SERVO_LAG_FRAMES); the raw error drives the
           # gradient learners (noise averages out there), the filtered one drives the ceiling gates
           speedfactor_error = (accel_lag - CS.out.aEgo)
@@ -1117,10 +1074,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           # both the scale EMA and the average_factor fit from an unrelated signal. Launch windows
           # are excluded too: the pedal applies seconds late there, which is not the smoothing
           # constant this model represents.
-          gas_response_observable = not self.civic_pcm or (
+          # A ceiling is not a commanded pedal position. Keep that calibration
+          # for the unshaped MVL path rather than fitting it to a non-binding cap.
+          gas_response_observable = not self.civic_pcm_speed_control and (not self.civic_pcm or (
             0 < self.pcm_gas_sent < self.params.NIDEC_GAS_MAX and
             self.pcm_speed_sent - CS.out.vEgo > NIDEC_DV_SAT_MIN
-          )
+          ))
           if CC.longActive and (CS.out.vEgo > 1e-5) and CS.car_gas_available and gas_response_observable and \
                (CS.engine_rpm > 500) and (not self.launch_active) and (self.gas_recovery_ticks == 0):
             # car_gas_per_pcm_gas learner: direct ratio CAR_GAS / sent PCM_GAS (wire units).
@@ -1222,7 +1181,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                        NIDEC_SPEED_FACTOR_MIN, factor_max))
               # alpha's cap used to be dv_sat itself, which is self-referential (alpha was inside
               # dv_sat) and pinned alpha at 0.1 on the Pilot once the knee had collapsed
-              alpha_delta = w * 0.001 * speedfactor_error
+              alpha_delta = 0.0 if self.civic_pcm_speed_control else w * 0.001 * speedfactor_error
               # Do not drag alpha down while the current plan is already asking for acceleration:
               # after lead/brake the lagged error is still negative for ~1 s and was poisoning alpha
               # into the absorbing hold-speed state described above.
@@ -1271,14 +1230,10 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         if self.frame % 2 == 0 and not (self.CP.flags & (HondaFlags.BOSCH_RADARLESS | HondaFlags.BOSCH_CANFD)) and not (self.CP.flags & HondaFlags.NIDEC):
           can_sends.append(hondacan.create_bosch_supplemental_1(self.packer, self.CAN))
         # If using stock ACC, spam cancel command to kill gas when OP disengages.
-        button_bus = (self.CAN.camera if civic_icbm_available(self.CP, self.CP_SP) and
-                      self.CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL else None)
         if pcm_cancel_cmd:
-          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.CANCEL, 0, CS.scm_ambient_light, self.CP,
-                                                       bus=button_bus))
+          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.CANCEL, 0, CS.scm_ambient_light, self.CP))
         elif CC.cruiseControl.resume:
-          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.RES_ACCEL, 0, CS.scm_ambient_light, self.CP,
-                                                       bus=button_bus))
+          can_sends.append(hondacan.spam_buttons_command(self.packer, self.CAN, CruiseButtons.RES_ACCEL, 0, CS.scm_ambient_light, self.CP))
 
       else:
         # Send gas and brake commands.
@@ -1475,10 +1430,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                    hud_control, hud_v_cruise, CS.is_metric, CS.acc_hud, speed_control,
                                                    self.CP.openpilotLongitudinalControl,
                                                    nrdr_options=self.nrdr.nidec_hud_options(CC, CS, hud_control, live),
-                                                   avoid_pcm_hold=clarity_pedal,
-                                                   fixed_cruise_active=(self.fixed_cruise and CC.enabled and CC.longActive and
-                                                                        CS.out.canValid and not CS.out.accFaulted and
-                                                                        not pcm_cancel_cmd and not CS.out.brakePressed)))
+                                                   avoid_pcm_hold=clarity_pedal))
 
       if live.spoof_camera_messages and self.CP.carFingerprint not in HONDA_BOSCH:
         can_sends.append(create_camera_message(self.packer, self.CAN.pt))
@@ -1600,7 +1552,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                                      CS.scm_ambient_light, self.CP, bus=self.CAN.camera))
 
     # Intelligent Cruise Button Management
-    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC, CC_SP, CS, self.packer, self.frame,
+    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer, self.frame,
                                                                        self.last_button_frame, self.CAN))
 
     new_actuators = actuators.as_builder()
@@ -1620,7 +1572,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     elif self.bosch_longitudinal is not None:
       if self.bosch_learning_params is not None:
         self.bosch_learning_params.persist(self.frame)
-    elif not self.legacy_pcm and self.frame % 6000 == 0:
+    elif self.frame % 6000 == 0:
       if self.CP.flags & HondaFlags.BOSCH or self.CP_SP.enableGasInterceptor:
         self.nrdr.persist()
       elif (pcm_learning and self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH) and

@@ -6,7 +6,6 @@ Civic PCM feedback-deadzone experiment is explicitly separate from the baseline.
 See MVL_LONGITUDINAL.md for provenance and explicitly retained adaptations.
 """
 import math
-from opendbc.car.honda.pcm_test_modes import governor_speed
 from collections import deque
 
 import numpy as np
@@ -423,7 +422,7 @@ def prepare(self, CC, CS):
   # acceleration (see nidec_set_speed_governed), so no longitudinal learner may read the
   # response there. The gas channel has always been protected here; the CR-V showed the
   # speed channel needs it too.
-  pcm_governor = governor_speed(getattr(self, "fixed_cruise", False), CS.out.cruiseState.speed)
+  pcm_governor = CS.out.cruiseState.speed
   set_speed_governed = nidec_set_speed_governed(CS.out.vEgo, pcm_governor)
 
   # wind brake from air resistance decel at high speed

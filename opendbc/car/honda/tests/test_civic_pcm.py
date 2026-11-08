@@ -14,9 +14,9 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 
-def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False, pcm_mode=2, wind_brake=True):
+def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False, pcm_mode=2, wind_brake=True, mvl=False):
   config = make_test_car_config()
-  config = replace(config, honda=replace(config.honda, nidec_pcm_mode=pcm_mode, nidec_wind_brake=wind_brake))
+  config = replace(config, honda=replace(config.honda, nidec_pcm_mode=pcm_mode, nidec_wind_brake=wind_brake, mvl_longitudinal=mvl))
   if wind_bench:
     config = replace(config, honda=replace(config.honda, civic_pcm_wind_credit_bench=True))
   config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, live_learning_gas=learning)
@@ -147,7 +147,7 @@ def test_learning_off_freezes_coefficients_without_disabling_timing_fix():
   assert all(all(key.startswith('lat_accel_factor_') for key in item) for item in config.honda.provider.persisted)
 
 
-def test_positive_plan_is_not_corrected_twice_in_speed_channel():
+def test_compatibility_path_braking_takes_priority_when_wind_credit_is_disabled():
   ci, _ = interface()
   ci.CS.out.aEgo = 0.8
   ci.CC.nidec_pid.i = -0.5
@@ -157,8 +157,8 @@ def test_positive_plan_is_not_corrected_twice_in_speed_channel():
   out, messages = ci.apply(cc.as_reader(), structs.CarControlSP(), 0)
   assert ci.CC.accel < 0  # The existing gas/brake feedback correction still runs.
   speed = [int.from_bytes(dat[:2], 'big') * 0.01 / 3.6 for address, dat, _ in messages if address == 0x30C]
-  assert speed and speed[0] == pytest.approx(20.0 + 4.0 * ci.CC.pcm_constraints.accel, abs=0.003)
-  assert out.brake == 0
+  assert ci.CC.pcm_constraints.accel > 0  # comfort shaping still computed a positive request
+  assert speed == [0.0] and out.brake > 0  # direct braking takes precedence; no wind credit
   assert ci.CC.speed_cmd_hist[-1][0] == pytest.approx(0.3)
 
 

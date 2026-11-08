@@ -143,13 +143,19 @@ def test_launch_seed_is_preserved_but_requires_fresh_reference(rpm, gas):
 
 
 @pytest.mark.parametrize('learning', [False, True])
-def test_old_identifiers_are_not_retrained_or_persisted_for_a_different_command_law(learning):
+def test_unused_gas_identifiers_are_preserved_while_speed_learning_can_run(learning):
   ci, config = interface(learning=learning)
   before = learned_state(ci.CC)
   for tick in range(6100):
     apply(ci, .5, tick)
-  assert learned_state(ci.CC) == before
-  assert all(all(key.startswith('lat_accel_factor_') for key in item) for item in config.honda.provider.persisted)
+  after = learned_state(ci.CC)
+  for key in ("gas_factors", "gas_alphas", "average_factor", "car_gas_per_pcm_gas", "speed_alphas"):
+    assert after[key] == before[key]
+  assert (after["speed_factors"] != before["speed_factors"]) is learning
+  if learning:
+    assert any("speed_factor" in item for item in config.honda.provider.persisted)
+  else:
+    assert all(all(key.startswith('lat_accel_factor_') for key in item) for item in config.honda.provider.persisted)
 
 
 @pytest.mark.parametrize('car,interceptor', [(CAR.HONDA_CLARITY, False), (CAR.HONDA_CLARITY, True),
@@ -226,8 +232,10 @@ def test_slowdown_target_can_be_below_actual_speed_without_a_hold_timer():
   # A mild slowdown still lowers the speed command below vEgo. Only the extra
   # negative feedforward is bounded; this is not an ego-speed clamp.
   apply(ci, -.1, 100, speed=19.9)
-  assert ci.CC.pcm_speed_sent == pytest.approx(19.8)
-  assert ci.CC.pcm_speed_sent < ci.CS.out.vEgo
+  # With wind credit disabled, friction braking can already be requested here.
+  # Braking must zero propulsion, even during a mild negative preview.
+  assert ci.CC.apply_brake_last > 0
+  assert ci.CC.pcm_speed_sent == 0 and ci.CC.pcm_gas_sent == 0
 
 
 @pytest.mark.parametrize('accel', [-.49, -.3, -.1, 0., .1, .5, 2.])

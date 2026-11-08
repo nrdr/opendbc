@@ -38,12 +38,13 @@ startup input. The host builds it from `HondaLiveLearningGas`; the host's
 default-ON policy is separate from this boundary's conservative default.
 
 `_configure_params` selects MVL only with openpilot longitudinal enabled and
-stock longitudinal not enforced. MVL suppresses both PCM custom-mode flags.
+stock longitudinal not enforced. MVL suppresses the original ECU-Matched
+mode flag; the later Civic Experimental shaping flag may coexist with MVL.
 `_get_params_sp` clears MVL for stock longitudinal or disabled openpilot
 longitudinal, but retains it for gas interceptors and Bosch. The controller
 latches the effective mode at construction. Effective learning remains ON
 throughout an MVL drive even when the saved parameter changes; the UI must
-require a parked restart.
+apply a changed mode on the next drive, without requiring a device reboot.
 
 The host's `mvl_longitudinal_enabled(CP)` policy requires Honda, openpilot
 longitudinal, and the flag. Host NRDR longitudinal tuning must be disabled
@@ -53,12 +54,12 @@ Personality contract:
 
 - Aggressive, Standard, and Relaxed use the pinned MVL profiles completely,
   including following profiles/distances, acceleration, and jerk. Their custom
-  settings must be locked in the UI. NRDR profile files/tune files must not
-  influence them.
+  settings remain editable but do not override those running profiles. NRDR
+  profile files/tune files must not influence them.
 - Econ alone retains its custom longer following distance and gentler
   acceleration/jerk.
 
-Personality generation, following-distance policy, UI locks, planner/longcontrol
+Personality generation, following-distance policy, UI policy, planner/longcontrol
 gains, and config adapters live in the parent repository. The nested tests
 compare identical host actuator requests; they do not certify parent planner
 or personality behavior. There are no personality-specific alternate command
@@ -74,9 +75,9 @@ controller.
 - PCM uses donor multiband gas/speed learners, governor/coast/saturation gates,
   feedforward model and sensitivity, speed PID, wind learning, launch templates,
   recovery windows, brake feedback, stop ramp, and command curves. The Civic
-  reference/allowance path, held-wire observer, ECU-matched ramps/deadband, PCM
-  constraints, wind-credit trial, and configurable wind disabling do not run
-  in this mode.
+  reference/allowance path and propulsion shaping run only when explicitly
+  selecting Civic Experimental alongside MVL (documented below). The original
+  ECU-Matched controller and wind-credit trial do not run in MVL mode.
 - Bosch uses donor low-speed brake PID, gas-factor/wind-factor/gas-alpha
   learning, model-specific learning rates, gas mapping and ramp, and stopping
   counter. The NRDR `LongGasLearner` is neither constructed nor called.
@@ -99,6 +100,29 @@ tests compare complete CAN messages and actuator feedback for PCM modes,
 Bosch, and interceptors, with live learning both OFF and ON.
 
 ## Explicit differences from the pinned donor
+
+### Optional Civic Experimental shaping alongside MVL
+
+Selecting PCM mode 2 on a non-interceptor Nidec Civic keeps the host MVL
+planner/personality policy but uses the later Civic planner-reference speed
+and gas-allowance adapter. It is not byte-for-byte donor controller parity.
+The inherited +5/-6 m/s^3 propulsion ramp and speed-dependent neutral taper
+remain; the original ECU-Matched timed brake/coast rules are not stacked on it.
+
+Wind Brake and the bench wind-credit overlay are ignored in this mode without
+changing or locking the saved choice. Brake requests remain outside the
+propulsion comfort filter. MVL speed-gain, ceiling and launch learning remain
+active on eligible samples, and persistence remains enabled. The speed fit
+requires a settled ramp, a near-current-speed reference and full gas allowance.
+Unused gas-factor/offset and direct-gas-response identifiers are preserved, not
+trained against an authority ceiling they do not control; the unused speed
+smoothing coefficient is likewise not trained. Stale references, override,
+AEB, braking and disengagement retain their propulsion-release precedence.
+
+The optional MVL feedback deadzone does not run through this different
+command adapter; its saved choice remains editable. Fixed PCM cruise speed,
+Kegman legacy mode and Nidec Civic ICBM have been retired. Bosch/interceptor
+control and other platforms' ICBM are not selected into Civic shaping.
 
 ### Optional Civic PCM feedback deadzone
 

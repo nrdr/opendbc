@@ -165,7 +165,7 @@ def create_bosch_supplemental_1(packer, CAN):
 
 
 def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, hud_v_cruise, is_metric, acc_hud, speed_control,
-                   alphalong, nrdr_options=None, avoid_pcm_hold=False, fixed_cruise_active=False):
+                   alphalong, nrdr_options=None, avoid_pcm_hold=False):
   acc_hud_values = {
     'CRUISE_SPEED': hud_v_cruise,
     'ENABLE_MINI_CAR': 1 if enabled else 0,
@@ -199,11 +199,6 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
 
   acc_hud_values = update_acc_hud_values(acc_hud_values, CP, enabled, pcm_speed, pcm_accel, hud_control,
                                           hud_v_cruise, acc_hud, speed_control, nrdr_options)
-  if fixed_cruise_active and enabled and CP.carFingerprint == CAR.HONDA_CIVIC and CP.flags & HondaFlags.NIDEC_PCM_FIXED_CRUISE:
-    # Apply last: lead/GPS/cluster display, flashing and sub-mode may not turn
-    # this control experiment's fixed ceiling into a changing speed request.
-    acc_hud_values['CRUISE_SPEED'] = 90.0 * CV.MPH_TO_KPH
-    acc_hud_values['ACC_ON'] = 1
   # Lead-speed display uses 252 for a stopped lead. Reserve that code for
   # the factory camera; our Clarity interceptor controller owns standstill hold.
   if avoid_pcm_hold and round(acc_hud_values["CRUISE_SPEED"]) == 252:
@@ -290,11 +285,9 @@ def spam_buttons_command(packer, CAN, cruise_button, cruise_setting, ambient_lig
   values = {
     'CRUISE_BUTTONS': cruise_button,
     'CRUISE_SETTING': cruise_setting,
+    # the camera consumes this byte too (adaptive high beam); echo the SCM's live value
+    'AMBIENT_LIGHT_MAYBE': ambient_light,
   }
-  # Civic Nidec's SCM_BUTTONS has no ambient-light field. All other platforms
-  # retain their existing payload; avoid an unknown-signal log per Civic press.
-  if CP.carFingerprint != CAR.HONDA_CIVIC:
-    values['AMBIENT_LIGHT_MAYBE'] = ambient_light
   if bus is None:
     # send buttons to camera on radarless (camera does ACC) cars
     bus = CAN.camera if CP.flags & HondaFlags.BOSCH_RADARLESS else CAN.pt

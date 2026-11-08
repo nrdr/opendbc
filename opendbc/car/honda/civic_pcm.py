@@ -2,6 +2,7 @@
 import math
 
 from opendbc.car.honda.values import CAR, HondaFlags
+from opendbc.car.honda.nidec_pcm_constraints import taper_positive_accel
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
@@ -95,6 +96,20 @@ def uses_civic_pcm(CP, CP_SP) -> bool:
   return bool(CP.carFingerprint == CAR.HONDA_CIVIC and CP.openpilotLongitudinalControl and
               not (CP.flags & HondaFlags.BOSCH) and not CP_SP.enableGasInterceptor and
               not (CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL))
+
+
+def speed_learning_observable(reference: float | None, speed: float, shaped_accel: float,
+                              requested_accel: float, gas_wire: float, maximum: float) -> bool:
+  """MVL's gain fit is valid only when the speed lead is effectively sf * accel.
+
+  The planner-reference offset and comfort ramp can otherwise look like ECU lag.
+  A full gas allowance leaves authority to the speed servo; a reduced allowance
+  cannot distinguish servo response from the gas ceiling. Launch learning has
+  its own measured-response gates and is independent of this steady-state fit.
+  """
+  return bool(reference is not None and all(math.isfinite(v) for v in (reference, speed, shaped_accel, requested_accel, gas_wire, maximum))
+              and abs(reference - speed) <= 0.1 and shaped_accel > 0.05
+              and abs(shaped_accel - taper_positive_accel(requested_accel, speed)) <= 0.005 and maximum > 0 and gas_wire >= maximum)
 
 
 def response_per_tick(alpha: float) -> float:
