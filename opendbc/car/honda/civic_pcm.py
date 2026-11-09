@@ -14,6 +14,44 @@ REFERENCE_MAX_AGE_NS = 250_000_000
 SLOWDOWN_PREVIEW_SECONDS = 1.0
 
 
+def coast_blend(requested: float, hill: float, speed: float, cruise: float, eligible: bool) -> tuple[float, float]:
+  """Free-cruise road-load credit (m/s2) and positive speed-feedforward fraction.
+
+  Candidate lower-envelope credit, not measured brake authority or a wind learner:
+  Nov 8 Civic coast samples (no pedals/brake/reported gas, zero PCM target, >.5s
+  settling) had -aEgo-g*sin(pitch) mostly above this 0.10--0.30 m/s2 curve.
+  The recorded trajectory is NOT a closed-loop validation of this approximation.
+
+  Credit fades out for overspeed or material slowdown. Leads, stops, invalid
+  observations and overrides veto it at both producer and controller. No timer
+  holds propulsion, no minimum speed target, no simultaneous gas/brake exception.
+  The same credit reduces positive feedforward BEFORE friction is required, so
+  gas cannot keep asking for full speed lead while the brake path enters coast.
+  """
+  if (not eligible or not all(math.isfinite(x) for x in (requested, hill, speed, cruise))
+      or requested <= -.5 or not 5.0 < speed < 50.0 or not 5.0 < cruise <= 100.0):
+    return 0.0, 1.0
+  # Deliberately below the observed coast resistance; never apply the saved
+  # Wind Brake factor (nearly 3 in the source drive, ~1.7 m/s2 at highway speed).
+  points = ((5.0, .10), (13.0, .15), (22.0, .25), (35.0, .30))
+  drag = points[-1][1]
+  for (v0, d0), (v1, d1) in zip(points, points[1:]):
+    if speed <= v1:
+      drag = d0 + (d1 - d0) * (speed - v0) / (v1 - v0)
+      break
+  rolling = min((speed - 5.0) / 4.0, 1.0)
+  # Full credit only through +0.25 m/s overspeed, none by +0.75 (~1.7 mph).
+  speed_weight = min(max((.75 - (speed - cruise)) / .5, 0.0), 1.0)
+  # A >=0.5 m/s2 slowdown retains the original brake path in full.
+  demand_weight = min(max((requested + .5) / .35, 0.0), 1.0)
+  credit = drag * rolling * min(speed_weight, demand_weight)
+  # Do not restore positive feedforward at the zero-credit overspeed endpoint.
+  # For negative wheel demand its limit as credit -> 0 is zero, not one.
+  fraction = (min(max((requested + hill + credit) / credit, 0.0), 1.0) if credit > 0.0
+              else float(requested + hill >= 0.0))
+  return credit, fraction
+
+
 class WindCreditTrial:
   """Bench-only: return some discarded brake demand when coasting isn't delivering it.
 

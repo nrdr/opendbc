@@ -472,6 +472,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Individual learners below still require authority over the command they fit.
     experimental_shaping = self.civic_pcm
     speed_deadzone_changed = False
+    civic_coast_credit, civic_propulsion_fraction = 0.0, 1.0
     pcm_learning = live.live_learning_gas and not self.ecu_matched_pcm and (not self.civic_pcm or (self.civic_pcm_speed_control and not (
       CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or CC.cruiseControl.cancel)))
     # Near set speed the PCM's own governor, not our request, can be limiting acceleration.
@@ -547,8 +548,17 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.nidec_pid_factor = 0.0
           self.accel = float(actuators.accel)
           adjust_accel = self.accel + hill_brake
+          coast_eligible = bool(CC.enabled and CC_SP.civicPcmCoastEligible and pcm_reference is not None and not self.launch_active
+                                and actuators.longControlState == LongCtrlState.pid and CS.out.canValid and not CS.out.accFaulted
+                                and not (CC_SP.leadOne.status or CC_SP.leadTwo.status or CC.hudControl.leadVisible)
+                                and not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or CS.out.stockFcw
+                                         or CC.cruiseControl.cancel or CC.driverMonitoringEscalation)
+                                and len(CC.orientationNED) == 3 and math.isfinite(self.pitch))
+          civic_coast_credit, civic_propulsion_fraction = civic_pcm.coast_blend(
+            self.accel, hill_brake, CS.out.vEgo, CC_SP.civicPcmCruiseSpeed, coast_eligible,
+          )
           brake, creep_impact = compute_gb_honda_nidec(
-            self.accel if self.launch_active else adjust_accel, CS.out.vEgo,
+            self.accel if self.launch_active else adjust_accel + civic_coast_credit, CS.out.vEgo,
             0.0 if self.launch_active else self.creep_factor,
           )
         elif self.CP.openpilotLongitudinalControl and not (self.CP.flags & HondaFlags.BOSCH):
@@ -912,7 +922,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             # The propulsion gain preserves acceleration headroom, but is not an
             # inverse of the PCM's torque-off/coast response. Keep the planner's
             # falling reference and use only a bounded preview below zero accel.
-            target = civic_pcm.speed_target(pcm_reference, pcm_shaped_accel, sf_eff) if pcm_reference is not None else 0.0
+            propulsion_accel = pcm_shaped_accel * civic_propulsion_fraction if pcm_shaped_accel > 0.0 else pcm_shaped_accel
+            target = civic_pcm.speed_target(pcm_reference, propulsion_accel, sf_eff) if pcm_reference is not None else 0.0
             # Keep raw braking, launch, stale-reference and override handling
             # outside this optional speed-servo setpoint transform.
             filtered_target = (civic_pcm.speed_deadzone_target(target, CS.out.vEgo, self.nrdr.config.civic_pcm_speed_deadzone)
@@ -1032,7 +1043,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         # speed-channel delay line and settled-response filter run every frame, gated or not: the frame the
         # servo is answering now must be on record even if it was a brake frame (then it teaches nothing)
         accel_lag, gas_pinned, lag_learn_ok = self.speed_cmd_hist[0]
-        speed_learning_observable = not self.civic_pcm_speed_control or (not speed_deadzone_changed and civic_pcm.speed_learning_observable(
+        speed_learning_observable = not self.civic_pcm_speed_control or (not speed_deadzone_changed and civic_propulsion_fraction == 1.0 and civic_pcm.speed_learning_observable(
           pcm_reference, CS.out.vEgo, pcm_shaped_accel, float(actuators.accel), gas_wire_for_learning, self.params.NIDEC_GAS_MAX,
         ))
         self.speed_cmd_hist.append((float(pcm_shaped_accel if self.civic_pcm_speed_control else actuators.accel if self.civic_pcm else self.accel),
@@ -1330,7 +1341,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             else:
               apply_brake = np.clip(self.brake_last - (wind_brake if self.nidec_wind_brake else 0.0), 0.0, 1.0)
               if (apply_brake > 0) and (actuators.longControlState == LongCtrlState.pid) and (CS.out.vEgo > 1e-5) and (not CS.out.stockAeb):
-                  if not ((self.accel >= 1e-5) and CS.out.vEgo < 1.0): # don't wind PID at launch lurch
+                  if civic_coast_credit == 0.0 and not ((self.accel >= 1e-5) and CS.out.vEgo < 1.0): # don't fit brake gain to credited coast demand
                     self.brake_pid_factor = self.nidec_brake_pid.update(error = -(self.accel - CS.out.aEgo) * apply_brake, speed = CS.out.vEgo)
               if (CS.out.vEgo >= 2): # save pid above 2m/s
                 self.brake_pid_factor_non_lowspeed = self.brake_pid_factor

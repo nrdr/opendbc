@@ -75,7 +75,7 @@ def test_original_deadband_is_normalized_not_pcm_bytes(speed, deadband):
 
 
 def test_ecu_matched_pid_limit_does_not_leak_to_off_or_interceptor():
-  for mode, interceptor, expected in [(0, False, .2), (1, False, .4), (2, False, .2), (1, True, 2.)]:
+  for mode, interceptor, expected in [(0, False, .2), (1, False, .4), (2, False, 2.), (1, True, 2.)]:
     ci, _ = interface(pcm_mode=mode, interceptor=interceptor)
     assert CarInterface.get_pid_accel_limits(ci.CP, ci.CP_SP, 30., 30.)[1] == pytest.approx(expected)
 

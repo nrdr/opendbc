@@ -8,6 +8,7 @@ from opendbc.car.honda.values import (CAR, HONDA_BOSCH, HONDA_BOSCH_A, HONDA_BOS
                                       HONDA_GAS_INTERCEPTOR_THRESHOLD_512, CarControllerParams, HondaFlags, HondaSafetyFlags)
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.carstate import CarState
+from opendbc.car.honda.civic_pcm import uses_civic_pcm
 from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
 
@@ -40,6 +41,11 @@ class CarInterface(CarInterfaceBase):
     if CP.carFingerprint in HONDA_BOSCH:
       return CarControllerParams.BOSCH_ACCEL_MIN, CarControllerParams.BOSCH_ACCEL_MAX
     elif CP_SP.enableGasInterceptor:
+      return CarControllerParams.NIDEC_ACCEL_MIN, CarControllerParams.NIDEC_ACCEL_MAX
+    elif CP.flags & HondaFlags.NIDEC_PCM_EXPERIMENTAL and uses_civic_pcm(CP, CP_SP):
+      # Experimental uses a planner-speed reference and the PCM's speed servo,
+      # not the legacy outer acceleration-error integrator. Test without the
+      # near-cruise windup ceiling; retain the normal absolute accel/brake limits.
       return CarControllerParams.NIDEC_ACCEL_MIN, CarControllerParams.NIDEC_ACCEL_MAX
     else:
       # NIDECs don't allow acceleration near cruise_speed,
