@@ -120,7 +120,7 @@ def test_same_pid_fraction_shrinks_counts_but_rescaled_physical_ff_stays_the_sam
     assert wire == -output * 4096 * (3840 / 4096)
     assert returned.torque == pytest.approx(output)
 
-  # The Firmware Controller must pair its inverse divisor with the host scale:
+  # The PTM Controller must pair its inverse divisor with the host scale:
   # one physical E4 can use a different normalized fraction without changing CAN.
   for tick, physical_e4 in enumerate((-3000, -1536, -384, 384, 1536, 3000), 10):
     fraction = -physical_e4 / 3840

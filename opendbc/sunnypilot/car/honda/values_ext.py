@@ -10,6 +10,12 @@ from enum import IntFlag
 
 RDX_TJB_A220_PTM = b"39990-TJB,A220\x00\x00"
 
+# These builds have a different command law from earlier comma-only revisions.
+PTM_EPS_REVISIONS = {
+  "HONDA_RIDGELINE": b"39990-T6Z,A110",  # rev b5
+  "HONDA_ODYSSEY": b"39990-THR,A020",  # 2026-11-10
+}
+
 
 class HondaFlagsSP(IntFlag):
   NIDEC_HYBRID = 1

@@ -1,7 +1,7 @@
 from opendbc.car import structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import CAR
-from opendbc.sunnypilot.car.honda.values_ext import RDX_TJB_A220_PTM
+from opendbc.sunnypilot.car.honda.values_ext import PTM_EPS_REVISIONS, RDX_TJB_A220_PTM
 
 
 TORQUE_MOD_PID_CARS = frozenset({
@@ -66,7 +66,13 @@ def configure_honda_platform(cp: structs.CarParams, candidate, car_fw, docs: boo
     cp.autoResumeSng = True
     cp.minEnableSpeed = -1.0
 
-def configure_modified_eps(cp: structs.CarParams, candidate) -> None:
+def configure_modified_eps(cp: structs.CarParams, candidate, car_fw=()) -> None:
+  revision = PTM_EPS_REVISIONS.get(str(candidate))
+  if revision is not None and any(fw.ecu == "eps" and bytes(fw.fwVersion).rstrip(b"\0") == revision for fw in car_fw):
+    # Match the PTM Controller inverse to the donor's linear E4 transport.
+    # Keep stock/older firmware, longitudinal settings and safety limits unchanged.
+    cp.lateralParams.torqueBP, cp.lateralParams.torqueV = [[0, 4096], [0, 4096]]
+
   if candidate in _EXTENDED_TORQUE_LIMITS:
     torque_limit = _EXTENDED_TORQUE_LIMITS[candidate]
     cp.lateralParams.torqueBP, cp.lateralParams.torqueV = [[0, torque_limit], [0, torque_limit]]

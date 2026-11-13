@@ -496,7 +496,7 @@ class CarInterface(CarInterfaceBase):
       stock_cp.lateralTuning.pid.kf = 0.000035
       stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.115], [0.052]]
 
-    configure_modified_eps(stock_cp, candidate)
+    configure_modified_eps(stock_cp, candidate, car_fw)
 
     if candidate in HONDA_BOSCH:
       pass
