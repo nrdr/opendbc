@@ -7,7 +7,7 @@ from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.interface import CarInterface
-from opendbc.car.honda.values import CAR, DBC, HondaSafetyFlags
+from opendbc.car.honda.values import CAR, DBC, HondaFlags, HondaSafetyFlags
 from opendbc.sunnypilot.car.honda.values_ext import HondaSafetyFlagsSP as SafetySP
 from opendbc.sunnypilot.car.interfaces import setup_interfaces
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
@@ -23,12 +23,12 @@ CLARITY_SAFETY = SafetySP.CLARITY_INTERCEPTOR_BRAKE | SafetySP.NIDEC_HYBRID | Sa
 
 class Rig:
   def __init__(self, car=CAR.HONDA_CLARITY, *, interceptor=True, hybrid=True, stock=False, full_authority=True,
-               dashboard_speed=0, alter_params=None):
+               dashboard_speed=0, alter_params=None, wind_brake=True):
     config = make_test_car_config(honda_stock_longitudinal=stock)
     config = replace(config, honda=replace(config.honda, clarity_interceptor_brake_bench=True))
     provider = config.honda.provider
     provider.live_tuning = replace(provider.live_tuning, live_learning_gas=False, full_brake_authority=full_authority,
-                                   alt_dashboard_speed=dashboard_speed)
+                                   alt_dashboard_speed=dashboard_speed, pedal_wind_brake=wind_brake)
     fp = gen_empty_fingerprint()
     if hybrid:
       fp[0][0x184] = 8
@@ -127,8 +127,9 @@ def test_raw_acc_status_is_hidden_from_cruise_but_drives_wire_cancel():
   assert field(rig.apply(cancel=True, ticks=2), BRAKE, 'CRUISE_CANCEL_CMD') == [1]  # explicit cancel survives even with raw PCM off
 
 
-def test_enabled_but_long_inactive_releases_pcm_and_interceptor():
-  rig = Rig()
+@pytest.mark.parametrize('wind_brake', [False, True])
+def test_enabled_but_long_inactive_releases_pcm_and_interceptor(wind_brake):
+  rig = Rig(wind_brake=wind_brake)
   rig.pcm_status(True)
   assert field(rig.apply(1., ticks=40), PEDAL, 'ENABLE')[-1] == 1
   released = rig.apply(enabled=True, long_active=False, state='off')
@@ -141,8 +142,9 @@ def test_enabled_but_long_inactive_releases_pcm_and_interceptor():
 
 @pytest.mark.parametrize('camera_brake', [0, 60], ids=['aeb-clear', 'aeb-active'])
 @pytest.mark.parametrize('override', ['disabled-stale-long', 'long-inactive', 'brakePressed', 'gasPressed', 'cancel'])
-def test_override_relinquishes_latched_brake_and_cancels_live_pcm(override, camera_brake):
-  rig = Rig()
+@pytest.mark.parametrize('wind_brake', [False, True])
+def test_override_relinquishes_latched_brake_and_cancels_live_pcm(override, camera_brake, wind_brake):
+  rig = Rig(wind_brake=wind_brake)
   holding = rig.apply(speed=0., state='stopping', camera_brake=0, ticks=100)
   assert field(holding, BRAKE, 'COMPUTER_BRAKE_HYBRID')[-1] == HOLD_COUNTS
   released = rig.apply(1.5, speed=0., state='stopping', enabled=override != 'disabled-stale-long', camera_brake=camera_brake,
@@ -350,3 +352,37 @@ def test_forced_stock_keeps_pcm_visible_and_does_not_author_longitudinal_frames(
   assert not rig.ci.CP_SP.safetyParam & SafetySP.CLARITY_INTERCEPTOR_BRAKE
   assert rig.pcm_status(True)
   assert not rig.apply(enabled=True, long_active=False, stopped=True, state='off')
+
+
+@pytest.mark.parametrize('personal', [False, True])
+def test_live_pedal_wind_toggle_changes_only_pedal_formula_not_brake_commands(personal):
+  def select(cp, _):
+    if personal:
+      cp.flags |= int(HondaFlags.PERSONAL_PEDAL)
+
+  reference, changed = Rig(alter_params=select), Rig(alter_params=select)
+  provider = changed.ci.CC.nrdr.config.provider
+  for rig in (reference, changed):
+    rig.pcm_status(True)
+  pedal_differs = False
+  # Toggle within the same controller instance. No drive restart or learned-state reset.
+  for wind_enabled, accel, speed, stopped in ((True, .5, 25., False), (False, 0., 25., False),
+                                             (False, -1., 25., False), (False, 0., 0., True),
+                                             (True, .5, 25., False)):
+    provider.live_tuning = replace(provider.live_tuning, pedal_wind_brake=wind_enabled)
+    args = dict(accel=accel, speed=speed, stopped=stopped, state='stopping' if stopped else 'pid', ticks=100)
+    baseline, actual = reference.apply(**args), changed.apply(**args)
+    assert actual[BRAKE] == baseline[BRAKE]
+    if not wind_enabled and speed > 0 and accel == 0:
+      pedal_differs |= actual[PEDAL] != baseline[PEDAL]
+    for brake, pedal_enabled in zip(field(actual, BRAKE, 'COMPUTER_BRAKE_HYBRID'), field(actual, PEDAL, 'ENABLE'), strict=True):
+      if brake > 0:
+        assert pedal_enabled == 0
+  assert pedal_differs
+
+
+@pytest.mark.parametrize('wind_enabled', [False, True])
+def test_camera_aeb_inhibits_pedal_with_both_wind_choices(wind_enabled):
+  rig = Rig(wind_brake=wind_enabled)
+  rig.apply(1.5, camera_brake=0, ticks=100)
+  assert_aeb_propulsion_inhibited(rig.apply(1.5, camera_brake=50, ticks=30))

@@ -1388,6 +1388,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               can_sends.extend(GasInterceptorCarController.update(
                 self, CC, CS, 0.0 if inhibit_gas else learned_gas, brake,
                 0.0 if inhibit_gas else wind_brake, self.packer, self.frame, live.roen_acceleration_limits,
+                wind_brake_enabled=live.pedal_wind_brake,
               ))
               self.gasint_nolearn_ticks = max(0, self.gasint_nolearn_ticks - 1)
 

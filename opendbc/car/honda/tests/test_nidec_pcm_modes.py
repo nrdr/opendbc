@@ -33,6 +33,19 @@ def test_excluded_paths_ignore_both_settings(car, interceptor, mode):
   assert not ci.CP.flags & (HondaFlags.NIDEC_PCM_ECU_MATCHED | HondaFlags.NIDEC_PCM_EXPERIMENTAL)
 
 
+@pytest.mark.parametrize("car", [CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH])
+@pytest.mark.parametrize("mode", [0, 1, 2])
+def test_live_pedal_wind_choice_does_not_change_pcm_or_bosch_commands(car, mode):
+  reference, _ = interface(car, pcm_mode=mode)
+  changed, config = interface(car, pcm_mode=mode)
+  for tick in range(120):
+    config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, pedal_wind_brake=tick < 30 or tick >= 90)
+    cc = control(.5 if tick < 60 else -.5).as_reader()
+    _, baseline = reference.apply(cc, structs.CarControlSP(), tick * 10_000_000)
+    _, actual = changed.apply(cc, structs.CarControlSP(), tick * 10_000_000)
+    assert actual == baseline
+
+
 def test_off_ignores_retired_bool_and_experimental_reference():
   ci, config = interface(pcm_mode=0)
   config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, ecu_matched_long=True)

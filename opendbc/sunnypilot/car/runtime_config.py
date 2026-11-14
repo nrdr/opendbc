@@ -33,6 +33,7 @@ class HondaLiveTuning:
   ecu_matched_long: bool
   full_brake_authority: bool
   roen_acceleration_limits: bool
+  pedal_wind_brake: bool = True
 
 
 class HondaConfigProvider(Protocol):

@@ -29,7 +29,7 @@ class GasInterceptorCarController:
     self.last_gasint = 0.0
 
   def update(self, CC: structs.CarControl, CS: structs.CarState, gas: float, brake: float, wind_brake: float,
-             packer, frame: int, roen_acceleration_limits: bool = False) -> list[CanData]:
+             packer, frame: int, roen_acceleration_limits: bool = False, *, wind_brake_enabled: bool = True) -> list[CanData]:
     can_sends = []
 
     if self.CP_SP.enableGasInterceptor:
@@ -38,7 +38,9 @@ class GasInterceptorCarController:
       if self.CP.flags & HondaFlags.PERSONAL_PEDAL:
         gas_mult = float(np.interp(CS.out.vEgo, [0.0, 10.0], [0.4, 1.0]))
       if CC.longActive:
-        self.gas = float(np.clip(gas_mult * (gas - brake + wind_brake * 3 / 4), 0., 1.))
+        # Off reproduces the pedal-only tune; brake actuation is handled separately.
+        pedal_request = gas - brake + wind_brake * 3 / 4 if wind_brake_enabled else gas
+        self.gas = float(np.clip(gas_mult * pedal_request, 0., 1.))
       else:
         self.gas = 0.0
       send_gas = min(self.gas, self.last_gasint + 0.004)
