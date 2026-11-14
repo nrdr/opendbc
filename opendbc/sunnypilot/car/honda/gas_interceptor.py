@@ -8,6 +8,7 @@ See the LICENSE.md file in the root directory for more details.
 import numpy as np
 
 from opendbc.car import structs
+from opendbc.car.honda.values import HondaFlags
 from opendbc.car.can_definitions import CanData
 from opendbc.sunnypilot.car import create_gas_interceptor_command
 
@@ -34,6 +35,8 @@ class GasInterceptorCarController:
     if self.CP_SP.enableGasInterceptor:
       # Taper low-speed gas and send an exact zero while longitudinal control is inactive.
       gas_mult = gas_multiplier(CS.out.vEgo, roen_acceleration_limits)
+      if self.CP.flags & HondaFlags.PERSONAL_PEDAL:
+        gas_mult = float(np.interp(CS.out.vEgo, [0.0, 10.0], [0.4, 1.0]))
       if CC.longActive:
         self.gas = float(np.clip(gas_mult * (gas - brake + wind_brake * 3 / 4), 0., 1.))
       else:

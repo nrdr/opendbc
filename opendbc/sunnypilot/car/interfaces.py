@@ -170,6 +170,11 @@ def _initialize_stop_and_go(CP: structs.CarParams, CP_SP: structs.CarParamsSP, c
 
 def _initialize_honda(CP: structs.CarParams, CP_SP: structs.CarParamsSP, config: HondaCarConfig) -> None:
   if CP.brand == 'honda':
+    CP.flags &= ~HondaFlags.PERSONAL_PEDAL.value
+    if (config.personal_pedal and CP.flags & HondaFlags.NIDEC and CP_SP.enableGasInterceptor
+        and CP.openpilotLongitudinalControl and not config.enforce_stock_longitudinal):
+      CP.flags &= ~HondaFlags.MVL_LONGITUDINAL.value
+      CP.flags |= HondaFlags.PERSONAL_PEDAL.value
     if config.enforce_stock_longitudinal:
       CP.openpilotLongitudinalControl = False
       CP.pcmCruise = True

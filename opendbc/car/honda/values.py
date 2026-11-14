@@ -90,6 +90,7 @@ class HondaFlags(IntFlag):
   NIDEC_PCM_EXPERIMENTAL = 65536
   MVL_LONGITUDINAL = 131072  # Immutable startup command law; not a safety flag.
   # Bits 262144/524288 retired with the fixed-cruise and legacy PCM experiments; do not reuse.
+  PERSONAL_PEDAL = 1048576  # Host controller selection, not additional safety authority.
 
 
 # Car button codes

@@ -23,9 +23,14 @@ class HondaControllerFeatures:
     self.mvl_longitudinal = bool(CP.flags & HondaFlags.MVL_LONGITUDINAL and CP.openpilotLongitudinalControl and
                                  not CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL)
     self.learner = None
+    self.personal_pedal = bool(CP.flags & HondaFlags.PERSONAL_PEDAL and CP.flags & HondaFlags.NIDEC
+                               and CP_SP.enableGasInterceptor and CP.openpilotLongitudinalControl)
     if not self.mvl_longitudinal:
-      gas_factor, wind_factor = self.config.provider.load_longitudinal_factors(CP.carFingerprint)
-      gas_alpha = self.config.provider.load_gas_alpha(CP.carFingerprint)
+      if self.personal_pedal:
+        gas_factor, wind_factor, gas_alpha = 1.0, 1.0, 0.0
+      else:
+        gas_factor, wind_factor = self.config.provider.load_longitudinal_factors(CP.carFingerprint)
+        gas_alpha = self.config.provider.load_gas_alpha(CP.carFingerprint)
       self.learner = LongGasLearner(gas_factor, wind_factor, CP.carFingerprint, gas_alpha)
 
     self.system_flash_until = 0.0
@@ -46,6 +51,8 @@ class HondaControllerFeatures:
 
   def live_tuning(self) -> HondaLiveTuning:
     live = self.config.provider.get_live_tuning()
+    if self.personal_pedal:
+      return replace(live, live_learning_gas=False, roen_acceleration_limits=False)
     # Saved UI changes apply next startup, never halfway through a drive.
     return replace(live, live_learning_gas=True) if self.mvl_longitudinal else live
 
