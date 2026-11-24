@@ -24,7 +24,7 @@ class HondaFlagsSP(IntFlag):
   HAS_CAMERA_MESSAGES = 8
   STOCK_LONGITUDINAL = 16
   CLARITY_INTERCEPTOR_BRAKE_CAPABLE = 32
-  CLARITY_ANGLE_MODE = 64  # angle-loop EPS build (0x04/0x05): steerControlType angle, see clarity_eps.py
+  CLARITY_ANGLE_MODE = 64  # angle-loop EPS build (0x04 on): steerControlType angle, see clarity_eps.py
   EPS_ANGLE_PTM = 128  # EPS reports the angle PTM software ID ('+' in both separator slots, 39990+TRW+A020)
 
 
@@ -34,3 +34,4 @@ class HondaSafetyFlagsSP:
   STOCK_LONGITUDINAL = 4
   GAS_INTERCEPTOR_THRESHOLD_512 = 8
   CLARITY_INTERCEPTOR_BRAKE = 16
+  CLARITY_ANGLE = 32  # Clarity angle-mode EPS: panda's angle rule on 0xE4 (honda.h HONDA_PARAM_SP_CLARITY_ANGLE)

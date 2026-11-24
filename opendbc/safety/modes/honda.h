@@ -30,6 +30,10 @@
 #define HONDA_GAS_INTERCEPTOR_ADDR_CHECK \
   {.msg = {{0x201, 0, 6, 50U, .max_counter = 15U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
 
+// Clarity angle mode: STEERING_SENSORS, the measured angle the angle rule checks the target against
+#define HONDA_CLARITY_ANGLE_ADDR_CHECK \
+  {.msg = {{0x14A, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
+
 #define HONDA_N_COMMON_TX_MSGS \
   {0xE4,  0, 5, .check_relay = true},   \
   {0x194, 0, 4, .check_relay = true},   \
@@ -119,9 +123,129 @@ static int HONDA_GET_INTERCEPTOR(const CANPacket_t *msg) {
   return (int)avg;
 }
 
+// Clarity angle-mode EPS (sunnypilot safety param HONDA_PARAM_SP_CLARITY_ANGLE, Nidec only, ported from the night-star7
+// personal branch e6676c283f / fbf15b2cbb). The modified EPS firmware reads 0xE4 bytes 0-1 as a steering-wheel angle
+// target, in the units of its own STEERING_SENSORS (0x14A) STEER_ANGLE (0.1 deg, same sign), when byte 2 bit 7 (request)
+// and bit 5 (angle payload) are both set; byte 3 sets the mode and the loop's authority (only reduces it; not checked).
+// A target of 0 steers to center, so the torque rule "bytes 0-1 must be 0" does not protect an angle car.
+// Rules: the standard vehicle-model angle rule of the other angle brands (steer_angle_cmd_checks_vm: 3.6 m/s^2 lateral
+// accel, 3.6 m/s^3 lateral jerk, at speed - 1 m/s, last target reset to the measured angle after a violation or while
+// not steering), with the angle for a lateral acceleration taken from the EPS's own clamp table (angle_ref AMAX, which
+// matches the car: v x yaw rate / table accel = 1.02) instead of a bicycle model, plus Honda's frame format:
+//  - lateral not allowed, or request and payload not both set: bytes 0-1, request and payload must all be 0
+//  - steering needs a measured angle (0x14A, an RX check in this mode) no older than 50 ms
+//  - |target| <= the 3.6 m/s^2 angle: 0.9 x the EPS 4.0 m/s^2 table, extended as 1/v^2 below 5 and above 30 m/s,
+//    capped at 500 deg. No exemptions.
+//  - per-frame step <= the angle the jerk limit allows in 10 ms: with jerk = accel = 3.6, that is the 3.6 m/s^2 angle
+//    per second (31.8 deg/s at 20 m/s), and never more than the EPS's own jump threshold
+//  - the first target after not steering or after a blocked frame is within one step of the measured angle (any of
+//    the last 6 0x14A samples when that target is checked)
+// Evidence: rwd-xray lab/clarity/PANDA_ANGLE_SAFETY_20261121 (re-simulated sender on the owner's drives, closed loop).
+#define HONDA_PARAM_SP_CLARITY_ANGLE 32U
+#define HONDA_ANGLE_MEAS_TIMEOUT_US 50000U
+#define HONDA_ANGLE_MAX 5000  // 0.1 deg
+static bool honda_angle_mode = false;
+static int honda_angle_last = 0;
+static bool honda_angle_from_wheel = true;   // the next target's step is measured from the wheel, not the last target
+static bool honda_angle_meas_seen = false;
+static uint32_t honda_angle_meas_ts = 0U;
+
+static void honda_angle_reset(bool enabled) {
+  honda_angle_mode = enabled;
+  honda_angle_last = 0;
+  honda_angle_from_wheel = true;
+  honda_angle_meas_seen = false;
+  honda_angle_meas_ts = 0U;
+}
+
+static float honda_angle_interp(const float *xs, const float *ys, int n, float x) {
+  float ret = ys[n - 1];
+  if (x <= xs[0]) {
+    ret = ys[0];
+  } else {
+    for (int i = 0; i < (n - 1); i++) {
+      if (x < xs[i + 1]) {
+        ret = ys[i] + ((ys[i + 1] - ys[i]) * (x - xs[i]) / (xs[i + 1] - xs[i]));
+        break;
+      }
+    }
+  }
+  return ret;
+}
+
+// the 3.6 m/s^2 steering-wheel angle at speed (m/s, >= 1), 0.1 deg
+static float honda_angle_accel_limit(float speed) {
+  static const float V[8] = {5., 8., 10., 12., 16., 20., 25., 30.};
+  static const float LIM[8] = {3411., 1440., 981., 722.7, 450., 317.7, 231.3, 183.6};  // 0.9 x angle_ref AMAX
+  float lim;
+  if (speed < V[0]) {
+    lim = LIM[0] * (V[0] * V[0]) / (speed * speed);
+  } else if (speed > V[7]) {
+    lim = LIM[7] * (V[7] * V[7]) / (speed * speed);
+  } else {
+    lim = honda_angle_interp(V, LIM, 8, speed);
+  }
+  return SAFETY_MIN(lim, (float)HONDA_ANGLE_MAX);
+}
+
+static bool honda_lateral_allowed(void) {
+  return controls_allowed || controls_allowed_lateral;
+}
+
+static void honda_angle_rx(const CANPacket_t *msg, unsigned int pt_bus) {
+  if (honda_angle_mode && (msg->bus == pt_bus)) {
+    if (msg->addr == 0x158U) {
+      UPDATE_VEHICLE_SPEED(((msg->data[0] << 8) | msg->data[1]) * 0.01 / 3.6);  // XMISSION_SPEED, 0.01 kph
+    }
+    if (msg->addr == 0x14AU) {  // an RX check in angle mode: checksum, counter and rate already verified
+      update_sample(&angle_meas, to_signed((msg->data[0] << 8) | msg->data[1], 16));
+      honda_angle_meas_seen = true;
+      honda_angle_meas_ts = microsecond_timer_get();
+    }
+  }
+}
+
+static bool honda_angle_tx_violation(const CANPacket_t *msg) {
+  static const float V[9] = {0., 5., 8., 10., 12., 15., 20., 25., 30.};
+  static const float JUMP[9] = {40., 40., 31., 25., 19., 10., 10., 10., 10.};          // EPS jump threshold, 0.1 deg per frame
+  const int target = to_signed((msg->data[0] << 8) | msg->data[1], 16);
+  const bool request = GET_BIT(msg, 23U);
+  const bool payload = GET_BIT(msg, 21U);
+  const bool steering = request && payload;
+  bool violation = false;
+
+  if (!honda_lateral_allowed() || !steering) {
+    violation = (target != 0) || request || payload;
+  } else {
+    // fudge the speed down 1 m/s: both limits only widen as speed falls
+    const float speed = SAFETY_MAX(((float)vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0f, 1.0f);
+    const bool meas_fresh = honda_angle_meas_seen &&
+      (safety_get_ts_elapsed(microsecond_timer_get(), honda_angle_meas_ts) <= HONDA_ANGLE_MEAS_TIMEOUT_US);
+    const float lim = honda_angle_accel_limit(speed);
+    // jerk limit: with lateral jerk = lateral accel = 3.6, the angle rate is the accel angle per second (100 Hz frames)
+    const float step = SAFETY_MIN(lim / 100.0f, honda_angle_interp(V, JUMP, 9, speed));
+    const int step_can = (int)(step + 1.0f);
+    const int lim_can = (int)(lim + 1.0f);
+    // from the wheel: within one step of the last 6 measured samples (the standard's inactive check uses the same
+    // min/max window; openpilot's carState angle is 10-20 ms older than the newest 0x14A); otherwise of the last target
+    const int hi = honda_angle_from_wheel ? SAFETY_CLAMP(angle_meas.max, -HONDA_ANGLE_MAX, HONDA_ANGLE_MAX) : honda_angle_last;
+    const int lo = honda_angle_from_wheel ? SAFETY_CLAMP(angle_meas.min, -HONDA_ANGLE_MAX, HONDA_ANGLE_MAX) : honda_angle_last;
+    violation = !meas_fresh;
+    violation |= safety_max_limit_check(target, hi + step_can, lo - step_can);
+    violation |= safety_max_limit_check(target, lim_can, -lim_can);
+  }
+  honda_angle_last = target;
+  // not steering, or a violation: the next target must be within one step of the wheel, measured when it is checked
+  // (the standard resets the last target to the measured angle here; checking against the samples current at the next
+  // frame follows a wheel that moves in between)
+  honda_angle_from_wheel = violation || !honda_lateral_allowed() || !steering;
+  return violation;
+}
+
 static void honda_rx_hook(const CANPacket_t *msg) {
   const bool pcm_cruise = ((honda_hw == HONDA_BOSCH) && !honda_bosch_long) || ((honda_hw == HONDA_NIDEC) && !enable_gas_interceptor);
   unsigned int pt_bus = honda_get_pt_bus();
+  honda_angle_rx(msg, pt_bus);
 
   // sample speed - 0x158 used for all supported Hondas except Integra (use 0x20E abs_sensor message)
   if (honda_no_engine_data_msg && (msg->addr == 0x20EU)) {
@@ -354,13 +478,19 @@ static bool honda_tx_hook(const CANPacket_t *msg) {
   }
 
   // STEER: safety check
-  if ((msg->addr == 0xE4U) || (msg->addr == 0x194U)) {
+  if (honda_angle_mode && (msg->addr == 0xE4U)) {
+    if (honda_angle_tx_violation(msg)) {
+      tx = false;
+    }
+  } else if ((msg->addr == 0xE4U) || (msg->addr == 0x194U)) {
     if (!(controls_allowed || controls_allowed_lateral)) {
       bool steer_applied = msg->data[0] | msg->data[1];
       if (steer_applied) {
         tx = false;
       }
     }
+  } else {
+    // not a steering message
   }
 
   // Bosch supplemental control check
@@ -478,9 +608,13 @@ static safety_config honda_nidec_init(uint16_t param) {
   honda_stock_longitudinal = GET_FLAG(current_safety_param_sp, HONDA_PARAM_STOCK_LONGITUDINAL);
   honda_gas_interceptor_threshold_512 = GET_FLAG(current_safety_param_sp, HONDA_PARAM_GAS_INTERCEPTOR_THRESHOLD_512);
   honda_clarity_brake_guard = GET_FLAG(current_safety_param_sp, HONDA_PARAM_SP_CLARITY_INTERCEPTOR_BRAKE);
-  // Exact Clarity configuration: not RLX/alternate Nidec, stock-long, or a different pedal threshold.
-  honda_clarity_brake_eligible = (param == 0U) && (current_safety_param_sp == (HONDA_PARAM_SP_CLARITY_INTERCEPTOR_BRAKE |
-                                  HONDA_PARAM_SP_NIDEC_HYBRID | HONDA_PARAM_GAS_INTERCEPTOR));
+  // Exact Clarity configuration: not RLX/alternate Nidec, stock-long, or a different pedal threshold. The angle-mode
+  // bit is independent of the pedal calibration, so it is set on both sides of this exact match.
+  honda_clarity_brake_eligible = (param == 0U) && ((current_safety_param_sp | HONDA_PARAM_SP_CLARITY_ANGLE) ==
+                                  (HONDA_PARAM_SP_CLARITY_INTERCEPTOR_BRAKE | HONDA_PARAM_SP_NIDEC_HYBRID |
+                                   HONDA_PARAM_GAS_INTERCEPTOR | HONDA_PARAM_SP_CLARITY_ANGLE));
+  // angle mode only on the Clarity's bus layout (never with the RLX steer-bus bridge, where the EPS is on another bus)
+  honda_angle_reset(GET_FLAG(current_safety_param_sp, HONDA_PARAM_SP_CLARITY_ANGLE) && !rlx_steer_bridge);
   honda_clarity_pedal_seen = false;
 
   if (rlx_steer_bridge) {
@@ -540,10 +674,47 @@ static safety_config honda_nidec_init(uint16_t param) {
     }
   }
 
+  if (honda_angle_mode) {
+    // the same checks plus STEERING_SENSORS (0x14A): the measured angle the angle rule bounds the target against (the
+    // rule never steers without a fresh one)
+    if (enable_gas_interceptor && enable_nidec_alt) {
+      static RxCheck honda_nidec_alt_interceptor_angle_rx_checks[] = {
+        HONDA_COMMON_NO_SCM_FEEDBACK_RX_CHECKS(0)
+        {.msg = {{0x1FA, 2, 8, 50U, .max_counter = 3U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // BRAKE_COMMAND
+        HONDA_GAS_INTERCEPTOR_ADDR_CHECK
+        HONDA_CLARITY_ANGLE_ADDR_CHECK
+      };
+      SET_RX_CHECKS(honda_nidec_alt_interceptor_angle_rx_checks, ret);
+    } else if (enable_gas_interceptor) {
+      static RxCheck honda_nidec_common_interceptor_angle_rx_checks[] = {
+        HONDA_COMMON_RX_CHECKS(0)
+        {.msg = {{0x1FA, 2, 8, 50U, .max_counter = 3U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // BRAKE_COMMAND
+        HONDA_GAS_INTERCEPTOR_ADDR_CHECK
+        HONDA_CLARITY_ANGLE_ADDR_CHECK
+      };
+      SET_RX_CHECKS(honda_nidec_common_interceptor_angle_rx_checks, ret);
+    } else if (enable_nidec_alt) {
+      static RxCheck honda_nidec_alt_angle_rx_checks[] = {
+        HONDA_COMMON_NO_SCM_FEEDBACK_RX_CHECKS(0)
+        {.msg = {{0x1FA, 2, 8, 50U, .max_counter = 3U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // BRAKE_COMMAND
+        HONDA_CLARITY_ANGLE_ADDR_CHECK
+      };
+      SET_RX_CHECKS(honda_nidec_alt_angle_rx_checks, ret);
+    } else {
+      static RxCheck honda_nidec_common_angle_rx_checks[] = {
+        HONDA_COMMON_RX_CHECKS(0)
+        {.msg = {{0x1FA, 2, 8, 50U, .max_counter = 3U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // BRAKE_COMMAND
+        HONDA_CLARITY_ANGLE_ADDR_CHECK
+      };
+      SET_RX_CHECKS(honda_nidec_common_angle_rx_checks, ret);
+    }
+  }
+
   return ret;
 }
 
 static safety_config honda_bosch_init(uint16_t param) {
+  honda_angle_reset(false);
   honda_clarity_brake_guard = false;
   honda_clarity_brake_eligible = false;
   honda_clarity_pedal_seen = false;

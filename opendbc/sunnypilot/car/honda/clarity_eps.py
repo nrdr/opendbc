@@ -1,7 +1,20 @@
 """Clarity EPS calibration modes and angle mode (mode-switch / angle-loop EPS builds), ported from the night-star7
 personal branch (2026-11-16..18). The EPS firmware: rwd-xray lab/clarity CLARITY_MODESW_MM_P2_20261116 (build 0x02),
 CLARITY_ANGLE_MODE_20261117 (0x04), CLARITY_ANGLE_MODE_0x05_20261118 (0x05, software ID 39990+TRW+A020),
-CLARITY_ANGLE_MODE_0x09_20261119 (0x09, same software ID), CLARITY_ANGLE_MODE_0x0A_20261120 (0x0A, same software ID).
+CLARITY_ANGLE_MODE_0x09_20261119 (0x09, same software ID), CLARITY_ANGLE_MODE_0x0A_20261120 (0x0A, same software ID),
+CLARITY_ANGLE_MODE_0x0B_20261121 (0x0B, same software ID, protocol v2).
+
+Protocol v2 (build 0x0B on; spec rwd-xray lab/audit_fable_20261121/v2/PROTOCOL_V2.md, ported from the night-star7 personal
+branch 13e2aa91a1): 0xE4 byte 3 = AUTH << 4 | MODE (0 stock, 1 angle), bits 3:2 zero, AUTH 0 = none .. 15 = full (v1's CUT
+inverted); the EPS refuses (never steers on) a frame whose byte 3 is not that, or whose payload bit is not exactly MODE 1 +
+request. 0x6A4 layout 4 (byte 0 bit 7 set) = FAULT, STEERING, CLAMP, stock LKAS state, active MODE; build ID; gain | REASON.
+One angle profile (the EPS clamps at panda's 3.6 m/s^2 table at v - 1 m/s); no torque PTM mode. openpilot speaks v1 until
+it sees a layout-4 frame, then v2 (a v1 frame refused by 0x0B is harmless: no steering until the switch).
+
+Panda (safety param HondaSafetyFlagsSP.CLARITY_ANGLE, honda.h): the standard angle rule of the other angle brands, |target|
+<= the 3.6 m/s^2 angle and per-frame step <= the 3.6 m/s^3 jerk step at speed - 1 m/s, the first target within one step of
+the measured 0x14A angle, bytes 0-1 / request / payload all zero while lateral is not allowed or not steering. The sender
+here applies the same limits to every frame, so panda never blocks a frame openpilot built.
 
 0xE4 byte 3 standard (v1): bit 0 control type (0 torque, 1 angle); bits 3:1 mode slot: 0 stock, 1 CleanPTM (0x02),
 2 P2 slot (0x04), 3 angle 4.0 m/s^2 (0x07), 4 angle 3.0 m/s^2 (0x09, build 0x05+); bits 7:4 reserved 0, except on the
@@ -13,16 +26,20 @@ angle payload only while the EPS reports the requested angle mode on a build tha
 Angle mode (steerControlType angle, startup setting, angle PTM ID 39990+TRW+A020 only): bytes 0-1 = -10 x target deg (0x14A STEER_ANGLE raw), byte 2 bit 5
 with the request. The target is a rate- and acceleration-limited trajectory inside the EPS's jump/slew/lateral-accel
 limits, starting at the wheel's angle and rate, its limits fading in over Override Fade Up; Steering Angle Rate Limit
-caps it further. On builds 0x04/0x05 the request drops on every driver press. On the authority build the request stays
-up through a press: the loop's authority drops to 0 at once (CUT 15), the sent target follows the wheel, and after the
-release the target moves from the wheel to the plan with the engage fade while authority comes back over Override Fade Up.
+caps it further. On builds 0x04/0x05 the request drops on every driver press. On the authority builds (0x09, 0x0A, 0x0B)
+the request stays up through a press: the loop's authority drops to 0 at once and the sent target stays on openpilot's
+plan (Hyundai/Kia style, ported from the night-star7 personal branch e6676c283f: the model assumes its desired curvature
+is carried out while lateral is active, so a target that follows the wheel and walks back after the release misleads
+it); at the release only authority changes, back over POST_PRESS_AUTH_S.
 """
+from enum import IntEnum
+
 import numpy as np
 
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.carlog import carlog
 from opendbc.car.honda.values import CAR
-from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
+from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 
 EPS_MODE_ANGLE = 3            # byte 3 bits 3:1
 BYTE3_ANGLE = (EPS_MODE_ANGLE << 1) | 1
@@ -47,6 +64,34 @@ TARGET_RATE_DEG_S = [150., 150., 100., 60., 40., 25.]
 TARGET_ACCEL_DEG_S2 = [450., 600., 450., 300., 225., 180.]    # 1.5 x torque-mode hands-off p99 (11-15 route)
 ENGAGE_S, ENGAGE_FLOOR = 1.5, 0.15    # limits ramp 15% -> 100% after the request rises; ENGAGE_S = default engage time
 RAW_MAX = 32767
+# panda's limits (honda.h honda_angle_accel_limit), the standard angle rule of the other angle brands: 3.6 m/s^2 lateral
+# accel and 3.6 m/s^3 lateral jerk, with the angle for a lateral acceleration from the EPS's own clamp table (0.9 x
+# EPS_AMAX_DEG = 3.6 m/s^2), 1/v^2 below 5 and above 30 m/s, capped at STEER_ANGLE_MAX. Panda evaluates them at speed - 1 m/s,
+# openpilot at v_ego, so openpilot stays inside.
+STD_ACCEL_SCALE = 0.9
+STEER_ANGLE_MAX = 500.0       # deg (panda HONDA_ANGLE_MAX)
+
+
+def std_angle_limit(v_ego: float) -> float:
+  """The 3.6 m/s^2 steering-wheel angle (deg), panda's absolute limit at this speed."""
+  v = max(float(v_ego), 1.0)
+  if v < AMAX_V[0]:
+    lim = STD_ACCEL_SCALE * EPS_AMAX_DEG[0] * (AMAX_V[0] / v) ** 2
+  elif v > AMAX_V[-1]:
+    lim = STD_ACCEL_SCALE * EPS_AMAX_DEG[-1] * (AMAX_V[-1] / v) ** 2
+  else:
+    lim = STD_ACCEL_SCALE * float(np.interp(v, AMAX_V, EPS_AMAX_DEG))
+  return min(lim, STEER_ANGLE_MAX)
+
+
+def std_angle_step(v_ego: float) -> float:
+  """Per-frame step (deg) from the 3.6 m/s^3 jerk limit: jerk = accel = 3.6, so the 3.6 m/s^2 angle per second."""
+  return std_angle_limit(v_ego) * DT_CTRL
+
+
+def sender_step(v_ego: float) -> float:
+  """Per-frame step: 0.6 x the EPS jump threshold and panda's jerk step."""
+  return min(float(np.interp(v_ego, _V, ANGLE_STEP_DEG)), std_angle_step(v_ego))
 
 
 ANGLE_PTM_SEPARATOR = b"+"   # "39990+TRW+A020": the PTM 2.0 / angle PTM software ID ("-" stock, "," torque PTM)
@@ -66,6 +111,9 @@ def apply_angle_mode(CP, CP_SP, requested: bool) -> None:
      CP_SP.flags & HondaFlagsSP.EPS_ANGLE_PTM:
     CP_SP.flags |= HondaFlagsSP.CLARITY_ANGLE_MODE.value
     CP.steerControlType = structs.CarParams.SteerControlType.angle
+    # panda's angle rule on 0xE4 (honda.h): request/payload/target only while lateral is allowed, |target| within the
+    # 3.6 m/s^2 angle, steps within the 3.6 m/s^3 jerk step, the first target within one step of the wheel
+    CP_SP.safetyParam |= HondaSafetyFlagsSP.CLARITY_ANGLE
 
 
 def angle_mode(CP_SP) -> bool:
@@ -73,7 +121,8 @@ def angle_mode(CP_SP) -> bool:
 
 
 def angle_limit(v_ego: float, amax_scale: float = 1.0) -> float:
-  return ANGLE_MAX_FRAC * amax_scale * float(np.interp(v_ego, AMAX_V, EPS_AMAX_DEG))
+  # 0.95 x the active EPS profile's clamp (mode 3: 4.0 m/s^2, mode 4: 3.0) and never past panda's 3.6 m/s^2 angle
+  return min(ANGLE_MAX_FRAC * amax_scale * float(np.interp(v_ego, AMAX_V, EPS_AMAX_DEG)), std_angle_limit(v_ego))
 
 
 def angle_to_raw(angle_deg: float) -> int:
@@ -87,24 +136,28 @@ class AngleModeSender:
     self.apply_rate = 0.0
     self.active_frames = 0
     self.sent_active = False
-    self.after_press = False  # authority build: after a press the limits use POST_PRESS_LIMITS_S until the request drops
+    self.out_angle = 0.0      # the angle actually sent (panda: per-frame step and absolute limit from here)
 
   def update(self, lat_active: bool, desired_deg: float, measured_deg: float, v_ego: float,
              angle_ready: bool, measured_rate_deg_s: float = 0.0, engage_s: float = ENGAGE_S,
              amax_scale: float = 1.0, rate_limit_deg_s: float = 0.0) -> tuple[int, bool, int]:
     active = bool(lat_active and angle_ready)
+    if active and not self.sent_active and abs(float(measured_deg)) > std_angle_limit(v_ego):
+      # no engage while the wheel is beyond panda's 3.6 m/s^2 angle: the first target must be within one step of the
+      # wheel and inside the limit, so panda would block every frame
+      active = False
     if not active:
       self.apply_angle, self.apply_rate = float(measured_deg), float(measured_rate_deg_s)
-      self.active_frames, self.sent_active, self.after_press = 0, False, False
+      self.out_angle = float(measured_deg)
+      self.active_frames, self.sent_active = 0, False
       return 0, False, 0
-    if self.after_press:                      # until the request drops: switching back mid-fade would shrink the limits
-      engage_s = POST_PRESS_LIMITS_S
     lim = angle_limit(v_ego, amax_scale)    # amax_scale = AMAX_CAP3_SCALE while the EPS runs mode 4
     # clamp the target, not the output, so the output still moves along the limited trajectory (from a measured angle
     # above the clamp it walks down to it instead of jumping, which the EPS would reject)
     target = float(np.clip(float(desired_deg), -lim, lim))
     fade = 1.0 if engage_s <= 0.0 else min(1.0, ENGAGE_FLOOR + (1.0 - ENGAGE_FLOOR) * self.active_frames * DT_CTRL / engage_s)
-    rate_cap = min(float(np.interp(v_ego, _VT, TARGET_RATE_DEG_S)), float(np.interp(v_ego, _V, ANGLE_STEP_DEG)) / DT_CTRL)
+    step = sender_step(v_ego)
+    rate_cap = min(float(np.interp(v_ego, _VT, TARGET_RATE_DEG_S)), step / DT_CTRL)
     if rate_limit_deg_s > 0.0:                # Steering Angle Rate Limit (Night Star / Galaxy), 0 = off
       rate_cap = min(rate_cap, rate_limit_deg_s)
     rate_max = fade * rate_cap
@@ -118,30 +171,28 @@ class AngleModeSender:
     self.apply_rate += float(np.clip(rate_des - self.apply_rate, -accel_max * DT_CTRL, accel_max * DT_CTRL))
     # rate_max shapes rate_des only, so a wheel already turning faster at engage eases down at accel_max instead of being
     # stopped in one frame; the EPS's own per-frame jump limit stays a hard bound
-    step_rate = float(np.interp(v_ego, _V, ANGLE_STEP_DEG)) / DT_CTRL
+    step_rate = step / DT_CTRL
     self.apply_rate = float(np.clip(self.apply_rate, -step_rate, step_rate))
     self.apply_angle += self.apply_rate * DT_CTRL
+    return self._send(self.apply_angle, measured_deg, v_ego, step)
+
+  def _send(self, angle_deg: float, measured_deg: float, v_ego: float, step: float) -> tuple[int, bool, int]:
+    """The sent angle: at most one step from the last sent angle (from the wheel on the first frame) and inside panda's
+    3.6 m/s^2 angle, exactly what panda checks."""
+    if not self.sent_active:
+      self.out_angle = float(measured_deg)
+    std_lim = std_angle_limit(v_ego)
+    self.out_angle = float(np.clip(self.out_angle + np.clip(float(angle_deg) - self.out_angle, -step, step), -std_lim, std_lim))
     self.active_frames += 1
     self.sent_active = True
-    return angle_to_raw(self.apply_angle), True, ANGLE_PAYLOAD
-
-  def follow(self, measured_deg: float, measured_rate_deg_s: float, v_ego: float) -> tuple[int, bool, int]:
-    """Authority build, driver pressing: the target follows the wheel (at most the EPS per-frame jump limit) instead of
-    the plan, and the trajectory restarts there with the wheel's rate and the engage fade, like a fresh engage. Holding
-    the plan target instead pulled the wheel toward a target the driver was leaving and left it 28 deg (p90 82) away at
-    release (route 000000ed)."""
-    step = float(np.interp(v_ego, _V, ANGLE_STEP_DEG))
-    self.apply_angle += float(np.clip(float(measured_deg) - self.apply_angle, -step, step))
-    self.apply_rate, self.active_frames, self.sent_active, self.after_press = float(measured_rate_deg_s), 0, True, True
-    return angle_to_raw(self.apply_angle), True, ANGLE_PAYLOAD
+    return angle_to_raw(self.out_angle), True, ANGLE_PAYLOAD
 
 
-# After a press on the authority build the hand-back uses these two fixed times, not Override Fade Up (locked in angle
-# mode; it still sets fresh engages). Measured on the owner's car on build 0x09 (routes f4/f7, 2026-11-20): a gentle
-# authority return with the target going straight back to the plan felt best, while a ~1 s target fade left the wheel
-# lagging the model after a mid-turn release (route 000000ed).
+# After a press on the authority build the authority climbs back over this fixed time, not Override Fade Up (locked in
+# angle mode; it still sets fresh engages). Measured on the owner's car on build 0x09 (routes f4/f7, 2026-11-20): a gentle
+# authority return with the target on the plan felt best, while a ~1 s target fade left the wheel lagging the model after
+# a mid-turn release (route 000000ed). The target itself never leaves the plan through a press.
 POST_PRESS_AUTH_S = 1.25    # s: the loop's authority climbs 0 -> full over this after a release (EPS floor 0.34 s)
-POST_PRESS_LIMITS_S = 0.0   # s: the target's rate/accel limits are full at once after a release (no limits fade)
 
 
 class AuthorityRamp:
@@ -184,6 +235,56 @@ KNOWN_BUILDS = {
   0x02: 0b111,
 }
 ANGLE_BUILDS = {0x04, 0x05, 0x09, 0x0A}   # builds with the in-EPS angle loop (0x6A4 layout v3)
+
+# --- protocol v2 (build 0x0B on), rwd-xray lab/audit_fable_20261121/v2/PROTOCOL_V2.md ---
+V2_BUILDS = {0x0B}           # build IDs that speak protocol v2 (0x6A4 layout 4); an unknown layout-4 build never steers
+V2_MODE_ANGLE = 1
+# carState updates (100 Hz) an angle request may go without the EPS reporting STEERING: 100 ms (owner's 0x09 drives: the
+# loop reported running 14 ms after the request rose, median, 34 ms at most)
+LOOP_START_FRAMES = 10
+# after "loop_not_running" the fault holds this long (carState updates, 1 s) before the request may retry: the fault drops
+# the request, which would otherwise clear it at once and re-raise it 10 frames later, over and over
+LOOP_RETRY_FRAMES = 100
+
+
+class Reason(IntEnum):
+  STEERING = 0
+  NO_REQUEST = 1
+  MODE_SWITCH_PENDING = 2
+  PROTOCOL = 3
+  JUMP = 4
+  STALE = 5
+  ANGLE_INVALID = 6
+  AUTHORITY_ZERO = 7
+  STOCK_LKAS_NOT_ENGAGED = 8
+
+
+def byte3_v1(requested_mode: int, cut: int) -> int:
+  """v1: the requested mode (3 or 4), control bit set, CUT (0 = full authority)."""
+  return ((cut & 0xF) << 4) | ((requested_mode & 0x7) << 1) | 1
+
+
+def byte3_v2(cut: int) -> int:
+  """v2: MODE 1 (angle), AUTH = 15 - CUT (AUTH 15 = full authority; the polarity is the opposite of v1's CUT)."""
+  return ((15 - (cut & 0xF)) << 4) | V2_MODE_ANGLE
+
+
+def is_layout4(vl) -> bool:
+  """Layout 4 sets byte 0 bit 7 (layout 3's requested mode is at most 4, so that bit is never set there)."""
+  return (int(vl["REQUESTED_MODE"]) & 0x8) != 0
+
+
+def decode_layout4(vl) -> dict:
+  """Layout-4 fields from the layout-3 DBC signals of the same bytes (no DBC change)."""
+  hi = int(vl["REQUESTED_MODE"])                                   # byte 0 bits 7:4 = layout, FAULT, STEERING, CLAMP
+  b0_low = (int(vl["ANGLE_LOOP_RUNNING"]) << 3) | int(vl["ACTIVE_MODE"])   # byte 0 bits 3:0
+  reason = (int(vl["ANGLE_TARGET_HELD"]) << 3) | (int(vl["ANGLE_FAULT_WHY"]) << 1) | int(vl["ANGLE_FAULT"])
+  try:
+    reason_name = Reason(reason).name
+  except ValueError:
+    reason_name = f"REASON_{reason}"
+  return dict(fault=bool(hi & 0x4), steering=bool(hi & 0x2), clamp=bool(hi & 0x1), lkas=(b0_low >> 2) & 0x3,
+              mode=b0_low & 0x3, build=int(vl["BUILD_ID"]), reason=reason, reason_name=reason_name)
 STATUS_TIMEOUT_FRAMES = 50   # carState updates (100 Hz): 0.5 s, 25 periods of the 50 Hz frame
 MSG = "EPS_CAL_STATUS"
 
@@ -212,6 +313,13 @@ class EpsCalStatus:
     self.angle_fault_why = 0    # 1 jump, 2 stale, 3 angle invalid
     self.angle_ref_deg = 0.0
     self.angle_out = 0
+    self.protocol = 1           # 2 once the EPS reports 0x6A4 layout 4
+    self.reason = ""            # v2: the EPS's REASON for not steering (layout 4 byte 2)
+    self.clamp = False          # v2: the EPS lateral-accel clamp is acting
+    self.request_sent = False   # v2 interlock: the angle request bit CarController sent last frame (note_angle_request)
+    self.not_running_frames = 0
+    self.retry_frames = 0       # v2 interlock: loop_not_running held this many more updates
+    self.retry_reason = ""      # the EPS's REASON when loop_not_running fired (kept while it is held)
 
   def update(self, cp) -> str:
     if not self.enabled:
@@ -233,6 +341,9 @@ class EpsCalStatus:
   def _check(self, vl) -> str:
     if self.frames_since > STATUS_TIMEOUT_FRAMES:
       return "lost"
+    if is_layout4(vl):
+      return self._check_v2(vl)
+    self.protocol = 1
     self.active_mode, self.build_id = int(vl["ACTIVE_MODE"]), int(vl["BUILD_ID"])
     caps = KNOWN_BUILDS.get(self.build_id)
     if caps is None:
@@ -251,20 +362,57 @@ class EpsCalStatus:
         return "angle_fault"
     return ""
 
+  def _check_v2(self, vl) -> str:
+    """Layout 4: a known v2 build, MODE 1 (angle), no FAULT; an angle request held more than LOOP_START_FRAMES without
+    STEERING faults "loop_not_running (<REASON>)" for LOOP_RETRY_FRAMES, then the request may retry. STEERING stays set
+    at AUTH 0 (AUTHORITY_ZERO), so a driver override with the request held does not trip it."""
+    s = decode_layout4(vl)
+    self.protocol, self.build_id, self.active_mode = 2, s["build"], s["mode"]
+    self.reason, self.clamp = s["reason_name"], s["clamp"]
+    if self.build_id not in V2_BUILDS:
+      return "unknown_build"
+    if not self.angle:
+      return "mode_not_built"                 # v2 has no torque PTM mode
+    if self.active_mode != V2_MODE_ANGLE:
+      return "inactive_mode"
+    self.loop_running = s["steering"]
+    self.angle_ref_deg, self.angle_out = float(vl["ANGLE_REF"]), int(vl["ANGLE_OUT"])
+    self.not_running_frames = self.not_running_frames + 1 if (self.request_sent and not self.loop_running) else 0
+    if s["fault"]:
+      return f"angle_fault ({self.reason})"
+    if self.not_running_frames > LOOP_START_FRAMES:
+      self.not_running_frames, self.retry_frames, self.retry_reason = 0, LOOP_RETRY_FRAMES, self.reason
+    if self.retry_frames > 0:
+      self.retry_frames -= 1
+      return f"loop_not_running ({self.retry_reason})"
+    return ""
+
+  def note_angle_request(self, sent: bool) -> None:
+    """CarController, every frame in angle mode: whether the 0xE4 it just built carries the angle request."""
+    self.request_sent = bool(sent)
+    if not self.request_sent:
+      self.not_running_frames = 0
+
+  def byte3(self, cut: int) -> int:
+    """0xE4 byte 3 for the protocol the EPS reported: v2 MODE 1 | AUTH (15 - CUT); v1 the requested mode, control bit,
+    CUT. cut = 0 when the request is down."""
+    return byte3_v2(cut) if self.protocol == 2 else byte3_v1(self.requested, cut)
+
   def set_angle_profile(self, cap3: bool) -> None:
     """Angle mode: request mode 4 (3.0 m/s^2) only once the EPS has reported a build that has it, else mode 3. The EPS
-    switches at the next LKAS idle; until it reports the new mode, _check faults inactive_mode and no angle is sent."""
+    switches at the next LKAS idle; until it reports the new mode, _check faults inactive_mode and no angle is sent.
+    Protocol v2 has one profile (the setting is ignored)."""
     if self.angle:
       self.requested = EPS_MODE_ANGLE_CAP3 if (cap3 and self.build_id in CAP3_BUILDS) else EPS_MODE_ANGLE
 
   @property
   def cap3_active(self) -> bool:
-    return self.angle and self.requested == EPS_MODE_ANGLE_CAP3
+    return self.angle and self.protocol == 1 and self.requested == EPS_MODE_ANGLE_CAP3
 
   @property
   def authority_ready(self) -> bool:
     """Angle mode is ready on the authority build: hold the request through a press and send CUT in byte 3 bits 7:4."""
-    return self.angle_ready and self.build_id in AUTH_BUILDS
+    return self.angle_ready and (self.build_id in AUTH_BUILDS or self.protocol == 2)
 
   @property
   def angle_ready(self) -> bool:

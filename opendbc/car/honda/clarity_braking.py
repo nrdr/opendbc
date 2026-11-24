@@ -11,7 +11,9 @@ def qualified(CP, CP_SP) -> bool:
   return (CP.carFingerprint == CAR.HONDA_CLARITY and CP.openpilotLongitudinalControl and not CP.pcmCruise
           and not CP.dashcamOnly and len(CP.safetyConfigs) == 1
           and CP.safetyConfigs[0].safetyModel == structs.CarParams.SafetyModel.hondaNidec and CP.safetyConfigs[0].safetyParam == 0
-          and CP_SP.safetyParam == (HondaSafetyFlagsSP.NIDEC_HYBRID | HondaSafetyFlagsSP.GAS_INTERCEPTOR | HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE)
+          # the Clarity angle-mode bit is independent of the pedal calibration (panda masks it the same way)
+          and (CP_SP.safetyParam & ~HondaSafetyFlagsSP.CLARITY_ANGLE) == (HondaSafetyFlagsSP.NIDEC_HYBRID | HondaSafetyFlagsSP.GAS_INTERCEPTOR |
+                                                                          HondaSafetyFlagsSP.CLARITY_INTERCEPTOR_BRAKE)
           and bool(CP.flags & HondaFlags.NIDEC) and bool(CP.flags & HondaFlags.HYBRID)
           and not (CP.flags & HondaFlags.BOSCH) and CP_SP.enableGasInterceptor
           and bool(CP_SP.flags & HondaFlagsSP.NIDEC_HYBRID) and not (CP_SP.flags & HondaFlagsSP.STOCK_LONGITUDINAL))

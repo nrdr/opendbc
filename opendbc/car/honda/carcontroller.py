@@ -788,23 +788,21 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if self.angle_sender is not None:
       # Angle mode replaces the torque: bytes 0-1 carry the target only while 0x6A4 reports the requested angle mode on
       # an angle build. Builds 0x04/0x05: no request during a driver press, whatever the override settings (a request
-      # held through a press makes the stiff angle loop fight the driver). Authority build (0x09): the request
-      # stays up, authority drops to 0 at once and the target follows the wheel (clarity_eps.AuthorityRamp,
-      # AngleModeSender.follow). Profile changes only while lateral is off (EPS switches at idle).
+      # held through a press makes the stiff angle loop fight the driver). Authority builds (0x09, 0x0A, 0x0B): the request
+      # stays up, authority drops to 0 at once (clarity_eps.AuthorityRamp) and the target stays on the plan (the sender keeps
+      # running its trajectory to actuators.steeringAngleDeg). Profile changes only while lateral is off (EPS switches at idle).
       if not CC.latActive:
         CS.eps_cal_status.set_angle_profile(live.clarity_angle_cap3)
-      self.eps_mode = (CS.eps_cal_status.requested << 1) | 1                   # 0x07 mode 3, 0x09 mode 4
       hold = CS.eps_cal_status.authority_ready
       cut = self.angle_authority.update(hold and CC.latActive, CS.out.steeringPressed, live.override_fade_up_s)
-      if hold and CC.latActive and CS.out.steeringPressed:
-        raw, lkas_active, angle_payload = self.angle_sender.follow(CS.out.steeringAngleDeg, CS.out.steeringRateDeg, CS.out.vEgo)
-      else:
-        raw, lkas_active, angle_payload = self.angle_sender.update(
-          CC.latActive and (hold or not CS.out.steeringPressed), actuators.steeringAngleDeg, CS.out.steeringAngleDeg,
-          CS.out.vEgo, CS.eps_cal_status.angle_ready, CS.out.steeringRateDeg, live.override_fade_up_s,
-          clarity_eps.AMAX_CAP3_SCALE if CS.eps_cal_status.cap3_active else 1.0, live.angle_rate_limit_deg_s)
-      if hold and lkas_active:
-        self.eps_mode |= cut << 4                                               # authority CUT, only with the request
+      raw, lkas_active, angle_payload = self.angle_sender.update(
+        CC.latActive and (hold or not CS.out.steeringPressed), actuators.steeringAngleDeg, CS.out.steeringAngleDeg,
+        CS.out.vEgo, CS.eps_cal_status.angle_ready, CS.out.steeringRateDeg, live.override_fade_up_s,
+        clarity_eps.AMAX_CAP3_SCALE if CS.eps_cal_status.cap3_active else 1.0, live.angle_rate_limit_deg_s)
+      # byte 3 for the protocol the EPS reported: v1 0x07 mode 3 / 0x09 mode 4 with CUT in bits 7:4 (0 = full); v2 (0x6A4
+      # layout 4, build 0x0B) MODE 1 with AUTH = 15 - CUT (15 = full). CUT only with the request (else full authority).
+      self.eps_mode = CS.eps_cal_status.byte3(cut if (hold and lkas_active) else 0)
+      CS.eps_cal_status.note_angle_request(lkas_active)
       apply_torque = raw
     can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, lkas_active, self.tja_control,
                                                       eps_mode=self.eps_mode, angle_payload=angle_payload))
