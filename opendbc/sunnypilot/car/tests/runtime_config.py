@@ -74,6 +74,9 @@ def make_test_car_config(*, bosch_a_radar: bool = True, honda_stock_longitudinal
       bosch_a_radar=bosch_a_radar,
       enforce_stock_longitudinal=honda_stock_longitudinal,
       provider=StaticHondaConfigProvider(),
+      # Existing Civic PCM regressions were written for the speed-target law, which still
+      # runs below the pedal-like law's blend speed. Tests of the new law opt in.
+      civic_pcm_pedal_law=False,
     ),
     hyundai=HyundaiCarConfig(longitudinal_tuning=0),
     subaru=SubaruCarConfig(stop_and_go=False, stop_and_go_manual_parking_brake=False),

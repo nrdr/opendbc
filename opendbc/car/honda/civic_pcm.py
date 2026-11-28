@@ -195,3 +195,119 @@ def advance_model(average: float, sensitivity: float, held_wire: int, alpha: flo
   alpha = response_per_tick(alpha)
   return (average * (1.0 - alpha) + held_wire * alpha,
           (held_wire - average) + (1.0 - alpha) * sensitivity)
+
+
+# Pedal-like transition (2026-11-28). Unvalidated on the road: the propulsion
+# numbers come from emulator probes of the 37805-5AJ firmware, not from the car.
+#
+# The interceptor path is smooth because the brake waits for road load, the pedal
+# reaches zero before any brake, and its controller closes the loop. On route
+# 00000031--0fa3f0ec26 the speed-target law below sent the brake (and with it a
+# zero PCM target) 5.1 times a minute, at 26 of 58 onsets against a planner
+# request that was zero or positive. See nrdr/docs/civic_pcm_pedal_law_2026-11-28.md.
+
+# Brake-side road load: the interceptor path's wind-brake curve at factor 1, as
+# a brake fraction. The learned wind factor is not used (it has saved near 3).
+ROAD_LOAD_BP = (0.0, 2.3, 35.0)  # m/s
+ROAD_LOAD_FRACTION = (0.001, 0.002, 0.15)
+# Acceleration the PCM reaches at PCM_GAS 200 in its acceleration mode (emulator,
+# 60-122 km/h; the 30 km/h point is the calibration map's upper end).
+ACCEL_CEILING_BP = tuple(kph / 3.6 for kph in (30.0, 60.0, 80.0, 91.0, 97.0, 110.0, 122.0))
+ACCEL_CEILING = (0.76, 0.707, 0.630, 0.598, 0.565, 0.511, 0.489)  # m/s2
+# The emulator probes cover highway speeds only: the previous law is kept below
+# the first speed and blended out linearly up to the second.
+PEDAL_LAW_SPEED = (6.0, 10.0)  # m/s
+ACCEL_MODE_LEAD = 10.0 / 3.6  # m/s above speed; holds the PCM in its acceleration mode
+SHED_GAIN = 10.0 / 3.6  # m/s of speed lead per m/s2 of acceleration error
+SHED_LEAD = (-6.0 / 3.6, 1.4 / 3.6)  # m/s; inside the PCM's hold band, never its release threshold
+SHED_ENTER = -0.05  # m/s2 of acceleration error
+INTEGRAL_GAIN = 0.25  # 1/s
+INTEGRAL_LIMIT = 0.15  # m/s2
+# Speed-error term, as in the interceptor's Personal Pedal controller and on the same
+# reference (the planner's present speed, which itself relaxes toward measured speed).
+# Its Econ highway gain, proportional only: the PCM's 1-2 s lag leaves no margin for
+# that controller's integral, and a standing offset from the target is accepted.
+SPEED_ERROR_GAIN = 0.25  # m/s2 per m/s
+SPEED_ERROR_LIMIT = 0.3  # m/s2
+ACCEL_FILTER_SECONDS = 0.3
+HARD_SLOWDOWN = -0.5  # m/s2; at or below this the throttle is released at once, as before
+
+
+def _interp(x: float, xs: tuple[float, ...], ys: tuple[float, ...]) -> float:
+  if x <= xs[0]:
+    return ys[0]
+  for (x0, y0), (x1, y1) in zip(zip(xs, ys, strict=True), zip(xs[1:], ys[1:], strict=True), strict=False):
+    if x <= x1:
+      return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+  return ys[-1]
+
+
+def road_load_fraction(speed: float) -> float:
+  """Brake fraction that lifting off already delivers; subtracted from the brake command."""
+  return _interp(speed, ROAD_LOAD_BP, ROAD_LOAD_FRACTION) if math.isfinite(speed) else 0.0
+
+
+def accel_ceiling(speed: float) -> float:
+  return _interp(speed, ACCEL_CEILING_BP, ACCEL_CEILING)
+
+
+class PedalLaw:
+  """Acceleration command for the PCM with a progressive lift-off.
+
+  Driving: PCM_SPEED sits a fixed lead above speed, which keeps the PCM in its
+  acceleration mode, and PCM_GAS carries the requested acceleration as a share
+  of the PCM's ceiling. A small clamped integral covers grade and map error.
+  Shedding (a negative request, or acceleration above the request): PCM_GAS
+  falls with the request and a small speed lead proportional to the error
+  lowers the throttle through the PCM's hold mode. The lead stays inside the
+  hold band, so the throttle is not cut. A request at or below HARD_SLOWDOWN
+  releases at once. Braking and every interlock stay in the controller.
+  """
+  def __init__(self):
+    self.accel = 0.0
+    self.integral = 0.0
+    self.shedding = False
+    self.tick: int | None = None
+
+  def reset(self, accel: float = 0.0) -> None:
+    self.accel = accel if math.isfinite(accel) else 0.0
+    self.integral = 0.0
+    self.shedding = False
+
+  def update(self, request: float, accel: float, speed: float, active: bool, braking: bool = False,
+             dt: float = 0.01, gas_max: int = 198, tick: int | None = None,
+             reference: float | None = None) -> tuple[float, float, float, bool]:
+    """Returns (speed lead in m/s, PCM_GAS before the rise limit, blend weight, release).
+
+    `tick` is the caller's frame counter. A gap in it (launch, disengagement) means
+    the filter and integral are stale, so they restart from the present state.
+    `reference` is the planner's present speed; the bounded speed-error term shapes
+    propulsion only. The brake and the material-slowdown release use the raw request.
+    """
+    if tick is not None:
+      stale = self.tick is not None and tick - self.tick != 1
+      self.tick = tick
+      if stale:
+        self.reset(accel)
+    if not active or not all(math.isfinite(x) for x in (request, accel, speed)):
+      self.reset(accel)
+      return 0.0, 0.0, 0.0, False
+    self.accel += (accel - self.accel) * dt / (ACCEL_FILTER_SECONDS + dt)
+    weight = min(max((speed - PEDAL_LAW_SPEED[0]) / (PEDAL_LAW_SPEED[1] - PEDAL_LAW_SPEED[0]), 0.0), 1.0)
+    ceiling = accel_ceiling(speed)
+    speed_term = 0.0
+    if reference is not None and math.isfinite(reference):
+      speed_term = min(max(SPEED_ERROR_GAIN * (reference - speed), -SPEED_ERROR_LIMIT), SPEED_ERROR_LIMIT)
+    # Nothing beyond the PCM's reach is commanded or integrated.
+    command = min(request + speed_term, ceiling)
+    error = command - self.accel
+    if command < 0.0 or error < SHED_ENTER:
+      self.shedding = True
+    elif error >= 0.0:
+      self.shedding = False
+    saturated = command + self.integral >= ceiling and error > 0.0
+    if weight > 0.0 and not (braking or self.shedding or saturated):
+      self.integral = min(max(self.integral + INTEGRAL_GAIN * error * dt, -INTEGRAL_LIMIT), INTEGRAL_LIMIT)
+    gas = 0.0 if command < 0.0 else gas_max * min(max((command + self.integral) / ceiling, 0.0), 1.0)
+    lead = min(max(SHED_GAIN * error, SHED_LEAD[0]), SHED_LEAD[1]) if self.shedding else ACCEL_MODE_LEAD
+    return lead, gas, weight, request <= HARD_SLOWDOWN

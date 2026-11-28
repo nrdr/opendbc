@@ -72,6 +72,7 @@ class HondaCarConfig:
   clarity_angle_mode: bool = False  # Startup only: Clarity steers by angle through the angle-loop EPS build (0x04/0x05).
   mvl_pcm_deadzone: float = 0.0  # Legacy acceleration experiment; not selected by the host UI.
   civic_pcm_speed_deadzone: float = 0.0  # Experimental PCM target-error deadband (m/s); startup only.
+  civic_pcm_pedal_law: bool = True  # Experimental PCM: pedal-like gas/brake transition; False keeps the speed-target law.
 
 
 @dataclass(frozen=True, slots=True)

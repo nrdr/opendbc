@@ -253,6 +253,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.ecu_matched_pcm = bool(not self.mvl_longitudinal and self.nidec_pcm and CP.flags & HondaFlags.NIDEC_PCM_ECU_MATCHED)
     self.nidec_wind_brake = not self.civic_pcm and (self.mvl_longitudinal or not self.nidec_pcm or config.nidec_wind_brake)
     self.civic_wind_trial = civic_pcm.WindCreditTrial() if self.civic_pcm and self.nidec_wind_brake and config.civic_pcm_wind_credit_bench else None
+    self.civic_pedal_law = civic_pcm.PedalLaw() if self.civic_pcm and config.civic_pcm_pedal_law else None
     self.keep_pcm_acc = clarity_braking.qualified(CP, CP_SP)
     self.clarity_hold = clarity_braking.StandstillHold()
     self.civic_pcm_speed_control = False
@@ -560,9 +561,12 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                                 and not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb or CS.out.stockFcw
                                          or CC.cruiseControl.cancel or CC.driverMonitoringEscalation)
                                 and len(CC.orientationNED) == 3 and math.isfinite(self.pitch))
-          civic_coast_credit, civic_propulsion_fraction = civic_pcm.coast_blend(
-            self.accel, hill_brake, CS.out.vEgo, CC_SP.civicPcmCruiseSpeed, coast_eligible,
-          )
+          if self.civic_pedal_law is None:
+            civic_coast_credit, civic_propulsion_fraction = civic_pcm.coast_blend(
+              self.accel, hill_brake, CS.out.vEgo, CC_SP.civicPcmCruiseSpeed, coast_eligible,
+            )
+          # With the pedal-like law the brake command itself is offset by road load
+          # further down, with or without a lead, so no eligibility credit is used.
           brake, creep_impact = compute_gb_honda_nidec(
             self.accel if self.launch_active else adjust_accel + civic_coast_credit, CS.out.vEgo,
             0.0 if self.launch_active else self.creep_factor,
@@ -952,6 +956,19 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             propulsion_accel = pcm_shaped_accel * civic_propulsion_fraction if pcm_shaped_accel > 0.0 else pcm_shaped_accel
             target = civic_pcm.speed_target(pcm_reference, propulsion_accel, sf_eff) if pcm_reference is not None else 0.0
             speed_lead = target - CS.out.vEgo
+            if self.civic_pedal_law is not None:
+              # Above its blend speed the pedal-like law replaces the speed target with
+              # an acceleration command: a fixed lead while driving, a small
+              # error-proportional lead while lifting off. Freshness, override, stop and
+              # brake interlocks below still zero the command.
+              civic_law_lead, civic_law_gas, civic_law_weight, civic_law_release = self.civic_pedal_law.update(
+                float(actuators.accel), CS.out.aEgo, CS.out.vEgo,
+                active=bool(pcm_reference is not None and not civic_wait_for_drive and actuators.longControlState == LongCtrlState.pid
+                            and not (CS.out.gasPressed or CS.out.brakePressed or CS.out.stockAeb)),
+                braking=self.apply_brake_last > 0, gas_max=self.params.NIDEC_GAS_MAX, tick=self.frame,
+                reference=pcm_reference,
+              )
+              speed_lead += civic_law_weight * (civic_law_lead - speed_lead)
           else:
             # The Civic gas/brake path already applies nidec_pid_factor. Applying
             # that correction to the speed servo too double-counted an accel
@@ -976,6 +993,13 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
                        if self.civic_pcm_speed_control else (gas_target if self.civic_pcm else int(gas_target)))
           if self.civic_pcm_speed_control and pcm_reference is None:
             pcm_accel = 0.0
+          elif self.civic_pedal_law is not None and self.civic_pcm_speed_control and not self.launch_active:
+            # PCM_GAS carries the requested acceleration as a share of the PCM's ceiling
+            # instead of standing at full allowance.
+            pcm_accel += civic_law_weight * (civic_law_gas - pcm_accel)
+            if civic_law_release and civic_law_weight >= 1.0:
+              # A material slowdown releases the throttle at once, as before.
+              pcm_speed, pcm_accel = 0.0, 0.0
           if pcm_accel > 0:
             pcm_speed = max(pcm_speed, 1.0) # prevent fault by always sending positive speed during gas
         max_speedcontrol = (pcm_speed > 99.999)
@@ -1361,9 +1385,19 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
               else:
                 apply_brake = int(np.clip(brake_fraction * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
             else:
-              apply_brake = np.clip(self.brake_last - (wind_brake if self.nidec_wind_brake else 0.0), 0.0, 1.0)
+              if self.civic_pedal_law is not None and self.civic_pcm_speed_control:
+                # The interceptor path's rule: the brake starts only once the demand
+                # exceeds what lifting off delivers. Fixed curve, not the learned wind
+                # factor; full brake authority drops the offset as it does there.
+                apply_brake = self.nrdr.nidec_brake_command(
+                  self.brake_last, civic_pcm.road_load_fraction(CS.out.vEgo), live.full_brake_authority,
+                )
+              else:
+                apply_brake = np.clip(self.brake_last - (wind_brake if self.nidec_wind_brake else 0.0), 0.0, 1.0)
               if (apply_brake > 0) and (actuators.longControlState == LongCtrlState.pid) and (CS.out.vEgo > 1e-5) and (not CS.out.stockAeb):
-                  if civic_coast_credit == 0.0 and not ((self.accel >= 1e-5) and CS.out.vEgo < 1.0): # don't fit brake gain to credited coast demand
+                  # don't fit brake gain to credited coast demand, nor to a command offset by road load
+                  if civic_coast_credit == 0.0 and not (self.civic_pedal_law is not None and self.civic_pcm_speed_control) and \
+                     not ((self.accel >= 1e-5) and CS.out.vEgo < 1.0):
                     self.brake_pid_factor = self.nidec_brake_pid.update(error = -(self.accel - CS.out.aEgo) * apply_brake, speed = CS.out.vEgo)
               if (CS.out.vEgo >= 2): # save pid above 2m/s
                 self.brake_pid_factor_non_lowspeed = self.brake_pid_factor

@@ -14,10 +14,14 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config
 
 
-def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False, pcm_mode=2, wind_brake=True, mvl=False, speed_deadzone=0.0):
+def interface(car=CAR.HONDA_CIVIC, *, interceptor=False, learning=False, wind_bench=False, pcm_mode=2, wind_brake=True, mvl=False, speed_deadzone=0.0,
+              pedal_law=False):
+  # pedal_law defaults to False here so the regressions written for the speed-target law keep
+  # exercising it (it still runs below the pedal-like law's blend speed). The runtime default is True.
   config = make_test_car_config()
   config = replace(config, honda=replace(config.honda, nidec_pcm_mode=pcm_mode, nidec_wind_brake=wind_brake,
-                                         mvl_longitudinal=mvl, civic_pcm_speed_deadzone=speed_deadzone))
+                                         mvl_longitudinal=mvl, civic_pcm_speed_deadzone=speed_deadzone,
+                                         civic_pcm_pedal_law=pedal_law))
   if wind_bench:
     config = replace(config, honda=replace(config.honda, civic_pcm_wind_credit_bench=True))
   config.honda.provider.live_tuning = replace(config.honda.provider.live_tuning, live_learning_gas=learning)
